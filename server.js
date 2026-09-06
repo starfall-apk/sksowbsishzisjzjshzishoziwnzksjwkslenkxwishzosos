@@ -72,6 +72,16 @@ app.get('/healthz', (req, res) => {
     res.status(200).json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// --- Диагностика конфигурации: НЕ показывает сам ключ, только его наличие/длину ---
+app.get('/api/debug-config', (req, res) => {
+    res.json({
+        aiKeySet: !!AI_KEY,
+        aiKeyLength: AI_KEY ? AI_KEY.length : 0,
+        aiUrl: AI_URL,
+        defaultModel: DEFAULT_MODEL
+    });
+});
+
 // --- Диагностика: какие модели реально доступны твоему ключу (сырой ответ Groq) ---
 app.get('/api/models', async (req, res) => {
     if (!AI_KEY) return res.status(500).json({ error: 'AI_KEY is not set' });
