@@ -12,6 +12,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie_light.min.js"></script>
     <!-- Supabase (бесплатная база данных) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- JSZip — чтение содержимого .zip файлов прямо в браузере -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         :root {
             --bg: #050505;
@@ -214,6 +216,157 @@
         .loading-spinner { width: 12px; height: 12px; border: 2px solid rgba(255,122,48,0.25); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        /* ---------- ПАНЕЛЬ БЫСТРЫХ ОПЦИЙ (поиск / файл / модель) ---------- */
+        .input-options-bar {
+            display: flex; gap: 8px; padding: 0 15px 10px; overflow-x: auto; scrollbar-width: none;
+        }
+        .input-options-bar::-webkit-scrollbar { display: none; }
+        .opt-pill {
+            display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+            background: var(--glass); border: 1px solid var(--border); border-radius: 14px;
+            padding: 8px 13px; font-size: 12.5px; color: rgba(255,255,255,0.65); cursor: pointer;
+            transition: all 0.2s; white-space: nowrap; -webkit-tap-highlight-color: transparent;
+        }
+        .opt-pill .material-icons-round { font-size: 16px; }
+        .opt-pill:active { transform: scale(0.96); }
+        .opt-pill.active { background: var(--accent-soft); border-color: rgba(255,122,48,0.4); color: var(--accent); }
+        .opt-pill.model-pill { max-width: 160px; }
+        .opt-pill.model-pill span.model-pill-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* ---------- ПРЕВЬЮ ПРИКРЕПЛЁННЫХ ФАЙЛОВ ---------- */
+        .attach-preview-bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 15px 10px; }
+        .attach-chip {
+            display: flex; align-items: center; gap: 8px; background: var(--glass);
+            border: 1px solid var(--border); border-radius: 12px; padding: 7px 10px 7px 12px;
+            font-size: 12.5px; max-width: 220px;
+        }
+        .attach-chip .material-icons-round.file-ico { font-size: 17px; color: var(--accent); flex-shrink: 0; }
+        .attach-chip .attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+        .attach-chip .attach-remove { cursor: pointer; opacity: 0.55; display: flex; flex-shrink: 0; }
+        .attach-chip .attach-remove:hover { opacity: 1; }
+        .attach-chip .attach-remove .material-icons-round { font-size: 15px; }
+
+        /* ---------- ПЛАШКА «РАЗМЫШЛЕНИЯ» ---------- */
+        .think-card {
+            align-self: flex-start; max-width: 92%; background: var(--glass); border: 1px solid var(--border);
+            border-radius: 16px; overflow: hidden; animation: pop 0.3s ease;
+        }
+        .think-head {
+            display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer;
+            transition: background 0.15s;
+        }
+        .think-head:hover { background: rgba(255,255,255,0.03); }
+        .think-avatar {
+            width: 22px; height: 22px; border-radius: 8px; flex-shrink: 0;
+            background: linear-gradient(135deg, var(--accent), #ffb37a);
+            display: flex; align-items: center; justify-content: center;
+            animation: thinkPulse 1.8s ease-in-out infinite;
+        }
+        .think-avatar .material-icons-round { font-size: 13px; color: #180b00; }
+        @keyframes thinkPulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255,122,48,0.35); }
+            50% { transform: scale(1.08); box-shadow: 0 0 0 6px rgba(255,122,48,0); }
+        }
+        .think-label { font-size: 12.5px; color: rgba(255,255,255,0.6); flex: 1; animation: labelFade 2.4s ease-in-out infinite; }
+        .think-card.done .think-label { animation: none; opacity: 0.6; }
+        @keyframes labelFade { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.9; } }
+        .think-chevron { transition: transform 0.25s ease; opacity: 0.5; font-size: 18px !important; }
+        .think-card.expanded .think-chevron { transform: rotate(180deg); }
+        .think-body {
+            max-height: 0; overflow: hidden; transition: max-height 0.3s ease;
+            font-size: 12.5px; line-height: 1.6; color: rgba(255,255,255,0.55);
+            padding: 0 14px; font-family: 'Fira Code', monospace;
+        }
+        .think-card.expanded .think-body { max-height: 400px; overflow-y: auto; padding: 0 14px 14px; }
+        .think-dots { display: flex; align-items: center; gap: 3px; }
+        .think-dots .dot-typing {
+            width: 5px; height: 5px; background: var(--accent); border-radius: 50%; display: inline-block;
+            animation: dotWave 1.1s ease-in-out infinite;
+        }
+        .think-dots .dot-typing:nth-child(2) { animation-delay: 0.15s; }
+        .think-dots .dot-typing:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes dotWave { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+        /* ---------- КАРТОЧКА НАВОДЯЩЕГО ВОПРОСА ---------- */
+        .clarify-card {
+            align-self: flex-start; max-width: 92%; background: var(--glass); border: 1px solid var(--border);
+            border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+            animation: pop 0.3s ease;
+        }
+        .clarify-question { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; line-height: 1.5; }
+        .clarify-question .material-icons-round { font-size: 18px; color: var(--accent); flex-shrink: 0; margin-top: 1px; }
+        .clarify-options { display: flex; flex-direction: column; gap: 8px; }
+        .clarify-opt-btn {
+            background: rgba(255,122,48,0.08); border: 1px solid rgba(255,122,48,0.25); color: #ffd2ac;
+            border-radius: 12px; padding: 10px 13px; font-size: 13.5px; text-align: left; cursor: pointer;
+            transition: all 0.15s;
+        }
+        .clarify-opt-btn:hover { background: rgba(255,122,48,0.18); }
+        .clarify-opt-btn:active { transform: scale(0.98); }
+        .clarify-custom-row { display: flex; gap: 8px; }
+        .clarify-custom-input {
+            flex: 1; background: rgba(255,255,255,0.04); border: 1px solid var(--border); border-radius: 12px;
+            padding: 9px 12px; color: #fff; font-size: 13.5px; outline: none;
+        }
+        .clarify-custom-send {
+            background: var(--accent); border: none; border-radius: 12px; width: 38px; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center; cursor: pointer; color: #180b00;
+        }
+        .clarify-card.answered .clarify-options,
+        .clarify-card.answered .clarify-custom-row { display: none; }
+        .clarify-answered-tag {
+            display: none; align-items: center; gap: 6px; font-size: 12px; color: var(--accent); opacity: 0.85;
+        }
+        .clarify-card.answered .clarify-answered-tag { display: flex; }
+        .clarify-answered-tag .material-icons-round { font-size: 14px; }
+
+        /* ---------- ЧЕК-ЛИСТ ЗАДАЧ ---------- */
+        .checklist-card {
+            align-self: flex-start; max-width: 92%; background: var(--glass); border: 1px solid var(--border);
+            border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+            animation: pop 0.3s ease; min-width: 220px;
+        }
+        .checklist-title { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; }
+        .checklist-title .material-icons-round { font-size: 17px; color: var(--accent); }
+        .checklist-progress-track { height: 4px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; }
+        .checklist-progress-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.35s ease; }
+        .checklist-items { display: flex; flex-direction: column; gap: 7px; }
+        .checklist-item { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; line-height: 1.45; }
+        .checklist-box {
+            width: 17px; height: 17px; border-radius: 6px; border: 1.5px solid rgba(255,255,255,0.3);
+            flex-shrink: 0; margin-top: 1px; display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s;
+        }
+        .checklist-item.checked .checklist-box { background: var(--accent); border-color: var(--accent); }
+        .checklist-box .material-icons-round { font-size: 13px; color: #180b00; opacity: 0; transform: scale(0.5); transition: all 0.2s; }
+        .checklist-item.checked .checklist-box .material-icons-round { opacity: 1; transform: scale(1); }
+        .checklist-item-text { transition: all 0.25s ease; }
+        .checklist-item.checked .checklist-item-text { text-decoration: line-through; opacity: 0.45; }
+        .checklist-count { font-size: 11px; opacity: 0.45; align-self: flex-end; }
+
+        /* ---------- МОДАЛКА ВЫБОРА МОДЕЛИ ---------- */
+        .model-option {
+            display: flex; align-items: center; gap: 12px; padding: 13px 14px; border-radius: 14px;
+            background: rgba(255,255,255,0.02); border: 1px solid var(--border); cursor: pointer;
+            transition: all 0.15s; margin-bottom: 8px;
+        }
+        .model-option:hover { background: var(--glass); }
+        .model-option.selected { border-color: var(--accent); background: rgba(255,122,48,0.08); }
+        .model-option-radio {
+            width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.3);
+            flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+        }
+        .model-option.selected .model-option-radio { border-color: var(--accent); }
+        .model-option-radio-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); opacity: 0; transition: opacity 0.15s; }
+        .model-option.selected .model-option-radio-dot { opacity: 1; }
+        .model-option-text { flex: 1; min-width: 0; }
+        .model-option-name { font-size: 14px; font-weight: 600; }
+        .model-option-desc { font-size: 12px; opacity: 0.5; margin-top: 2px; }
+        .model-option-reasoning-tag {
+            font-size: 10px; color: var(--accent); background: rgba(255,122,48,0.12);
+            padding: 2px 7px; border-radius: 6px; flex-shrink: 0;
+        }
+
         @media (max-width: 768px) {
             #sidebar { position: fixed; top: 0; bottom: 0; left: 0; margin-left: -280px; box-shadow: 20px 0 40px rgba(0,0,0,0.4); }
             #sidebar.open { margin-left: 0; }
@@ -276,6 +429,24 @@
 
         <div id="chat"></div>
 
+        <div id="attach-preview-bar" class="attach-preview-bar" style="display:none;"></div>
+
+        <div class="input-options-bar">
+            <div class="opt-pill" id="websearch-pill" onclick="toggleWebSearch()">
+                <span class="material-icons-round">travel_explore</span>
+                <span>Поиск в интернете</span>
+            </div>
+            <div class="opt-pill" id="attach-pill" onclick="document.getElementById('file-attach-input').click()">
+                <span class="material-icons-round">attach_file</span>
+                <span>Файл</span>
+            </div>
+            <input type="file" id="file-attach-input" style="display:none" multiple accept=".txt,.md,.csv,.json,.js,.ts,.py,.html,.css,.xml,.yml,.yaml,.log,.zip,text/plain,application/zip" onchange="handleFileAttachment(this.files)">
+            <div class="opt-pill model-pill" id="model-pill" onclick="openModelPicker()">
+                <span class="material-icons-round">model_training</span>
+                <span class="model-pill-label" id="model-pill-label">Модель</span>
+            </div>
+        </div>
+
         <div class="input-area">
             <input type="text" id="input" class="input-box" placeholder="Спроси что-нибудь у Окто..." autocomplete="off">
             <button id="send-btn"><div id="lottie-send" style="width:24px;height:24px"><span class="material-icons-round" style="color:#180b00">send</span></div></button>
@@ -303,6 +474,14 @@
                 <span>Я подтверждаю, что ознакомлен с политикой и принимаю условия использования сервиса.</span>
             </label>
             <button id="accept-btn" class="modal-btn" disabled>Подтвердить и продолжить</button>
+        </div>
+    </div>
+
+    <div id="model-overlay" class="modal-overlay">
+        <div class="modal">
+            <h2>Выбор модели 🧠</h2>
+            <div id="model-list"></div>
+            <button class="modal-btn outline" onclick="closeModal('model-overlay')">Закрыть</button>
         </div>
     </div>
 
@@ -393,6 +572,15 @@
         let currentChatId = null;
         let chats = []; // {id, title, messages: [{role, content}]}
 
+        // ---------- Новые опции: модель / веб-поиск / вложения ----------
+        let modelCatalog = [];
+        let selectedModel = null;
+        let webSearchEnabled = false;
+        let attachedFiles = []; // { name, content, kind: 'text' | 'zip-listing' }
+        const attachPreviewBar = document.getElementById('attach-preview-bar');
+        const websearchPill = document.getElementById('websearch-pill');
+        const modelPillLabel = document.getElementById('model-pill-label');
+
         function setStatus(text, isLoading = false) {
             statusSpan.innerHTML = isLoading ? `<span class="loading-spinner"></span> ${text}` : text;
         }
@@ -432,6 +620,123 @@
                 };
                 termsCheck.onchange = () => { accept.disabled = !termsCheck.checked; };
             }
+        }
+
+        /* ======================================================================
+           ВЫБОР МОДЕЛИ
+           ====================================================================== */
+        async function loadModelCatalog() {
+            try {
+                const res = await fetch('/api/model-list');
+                const data = await res.json();
+                modelCatalog = data.models || [];
+                selectedModel = localStorage.getItem('octo_selected_model') || data.default || (modelCatalog[0] && modelCatalog[0].id);
+                updateModelPillLabel();
+            } catch (e) {
+                console.error('Не удалось загрузить список моделей', e);
+                modelPillLabel.textContent = 'Модель';
+            }
+        }
+        function updateModelPillLabel() {
+            const m = modelCatalog.find(x => x.id === selectedModel);
+            modelPillLabel.textContent = m ? m.name : 'Модель';
+        }
+        function openModelPicker() {
+            const list = document.getElementById('model-list');
+            list.innerHTML = modelCatalog.map(m => `
+                <div class="model-option ${m.id === selectedModel ? 'selected' : ''}" data-model-id="${m.id}">
+                    <div class="model-option-radio"><div class="model-option-radio-dot"></div></div>
+                    <div class="model-option-text">
+                        <div class="model-option-name">${escapeHTML(m.name)}</div>
+                        <div class="model-option-desc">${escapeHTML(m.desc || '')}</div>
+                    </div>
+                    ${m.reasoning ? '<span class="model-option-reasoning-tag">думает</span>' : ''}
+                </div>
+            `).join('');
+            list.querySelectorAll('.model-option').forEach(el => {
+                el.addEventListener('click', () => {
+                    selectedModel = el.getAttribute('data-model-id');
+                    localStorage.setItem('octo_selected_model', selectedModel);
+                    updateModelPillLabel();
+                    closeModal('model-overlay');
+                });
+            });
+            openModal('model-overlay');
+        }
+
+        /* ======================================================================
+           ПОИСК В ИНТЕРНЕТЕ (переключатель)
+           ====================================================================== */
+        function toggleWebSearch() {
+            webSearchEnabled = !webSearchEnabled;
+            websearchPill.classList.toggle('active', webSearchEnabled);
+        }
+
+        /* ======================================================================
+           ВЛОЖЕНИЯ: текстовые файлы читаются как есть, .zip разбирается через JSZip
+           ====================================================================== */
+        async function handleFileAttachment(fileList) {
+            const files = Array.from(fileList);
+            for (const file of files) {
+                try {
+                    if (file.name.toLowerCase().endsWith('.zip')) {
+                        const zip = await JSZip.loadAsync(file);
+                        const entries = Object.keys(zip.files).filter(name => !zip.files[name].dir);
+                        let combined = `Содержимое архива "${file.name}" (${entries.length} файлов):\n\n`;
+                        for (const name of entries.slice(0, 30)) {
+                            const entry = zip.files[name];
+                            const isTexty = /\.(txt|md|json|js|ts|py|html|css|xml|yml|yaml|csv|log|c|cpp|java|go|rs|php|rb|sh)$/i.test(name);
+                            combined += `--- ${name} ---\n`;
+                            if (isTexty) {
+                                try {
+                                    const text = await entry.async('string');
+                                    combined += text.slice(0, 3000) + (text.length > 3000 ? '\n...(обрезано)...' : '') + '\n\n';
+                                } catch (e) {
+                                    combined += '(не удалось прочитать содержимое)\n\n';
+                                }
+                            } else {
+                                combined += '(бинарный файл, содержимое не показано)\n\n';
+                            }
+                        }
+                        if (entries.length > 30) combined += `...и ещё ${entries.length - 30} файлов.\n`;
+                        attachedFiles.push({ name: file.name, content: combined, kind: 'zip-listing' });
+                    } else {
+                        const text = await file.text();
+                        attachedFiles.push({ name: file.name, content: text.slice(0, 12000), kind: 'text' });
+                    }
+                } catch (e) {
+                    console.error('Ошибка чтения файла', file.name, e);
+                    alert('Не получилось прочитать файл: ' + file.name);
+                }
+            }
+            renderAttachPreview();
+            document.getElementById('file-attach-input').value = '';
+        }
+        function renderAttachPreview() {
+            if (!attachedFiles.length) {
+                attachPreviewBar.style.display = 'none';
+                attachPreviewBar.innerHTML = '';
+                return;
+            }
+            attachPreviewBar.style.display = 'flex';
+            attachPreviewBar.innerHTML = attachedFiles.map((f, i) => `
+                <div class="attach-chip">
+                    <span class="material-icons-round file-ico">${f.kind === 'zip-listing' ? 'folder_zip' : 'description'}</span>
+                    <span class="attach-name">${escapeHTML(f.name)}</span>
+                    <span class="attach-remove" data-idx="${i}"><span class="material-icons-round">close</span></span>
+                </div>
+            `).join('');
+            attachPreviewBar.querySelectorAll('.attach-remove').forEach(el => {
+                el.addEventListener('click', () => {
+                    attachedFiles.splice(Number(el.getAttribute('data-idx')), 1);
+                    renderAttachPreview();
+                });
+            });
+        }
+        function buildAttachmentContext() {
+            if (!attachedFiles.length) return '';
+            return '\n\n[Прикреплённые файлы пользователя]\n' +
+                attachedFiles.map(f => `Файл "${f.name}":\n${f.content}`).join('\n\n');
         }
 
         // ---------- Сайдбар (мобильный) ----------
@@ -810,7 +1115,7 @@
         }
 
         /* ======================================================================
-           POLLINATIONS AI — запрос к бесплатной GPT-модели
+           ЗАПРОС К ИИ-СЕРВЕРУ (Groq через наш backend)
            ====================================================================== */
         async function askAI(prompt, historyMessages) {
             try {
@@ -819,16 +1124,133 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         prompt,
-                        history: historyMessages.slice(-16)
+                        history: historyMessages.slice(-16),
+                        model: selectedModel,
+                        webSearch: webSearchEnabled
                     })
                 });
                 if (!response.ok) throw new Error('HTTP ' + response.status);
                 const data = await response.json();
-                return (data.reply || '').trim() || "Хм, пришёл пустой ответ 🐙 Попробуй ещё раз.";
+                if (!data.reply) data.reply = "Хм, пришёл пустой ответ 🐙 Попробуй ещё раз.";
+                return data;
             } catch (e) {
                 console.error(e);
-                return "Ой, не получилось связаться с сервером ИИ 🐙 Попробуй ещё раз через пару секунд.";
+                return { reply: "Ой, не получилось связаться с сервером ИИ 🐙 Попробуй ещё раз через пару секунд.", reasoning: null };
             }
+        }
+
+        /* ======================================================================
+           ПАРСИНГ СПЕЦИАЛЬНЫХ БЛОКОВ ОТВЕТА: [CLARIFY] и [CHECKLIST]
+           ====================================================================== */
+        function extractClarify(text) {
+            const match = text.match(/\[CLARIFY\]([\s\S]*?)\[\/CLARIFY\]/);
+            if (!match) return { cleanText: text, clarify: null };
+            const block = match[1];
+            const qMatch = block.match(/Q:\s*(.+)/);
+            const options = Array.from(block.matchAll(/O:\s*(.+)/g)).map(m => m[1].trim()).filter(Boolean);
+            const clarify = qMatch ? { question: qMatch[1].trim(), options } : null;
+            const cleanText = text.replace(match[0], '').trim();
+            return { cleanText, clarify };
+        }
+        function extractChecklist(text) {
+            const match = text.match(/\[CHECKLIST(?:\s+title="([^"]*)")?\]([\s\S]*?)\[\/CHECKLIST\]/);
+            if (!match) return { cleanText: text, checklist: null };
+            const title = match[1] || 'Чек-лист';
+            const body = match[2];
+            const items = Array.from(body.matchAll(/^-\s*\[( |x|X)\]\s*(.+)$/gm)).map(m => ({
+                checked: m[1].toLowerCase() === 'x',
+                text: m[2].trim()
+            }));
+            const cleanText = text.replace(match[0], '').trim();
+            return { cleanText, checklist: { title, items } };
+        }
+
+        /* ======================================================================
+           РЕНДЕР: ПЛАШКА РАЗМЫШЛЕНИЙ
+           ====================================================================== */
+        function renderThinkingCard(reasoningText) {
+            const div = document.createElement('div');
+            div.className = 'think-card';
+            div.innerHTML = `
+                <div class="think-head">
+                    <div class="think-avatar"><span class="material-icons-round">psychology</span></div>
+                    <span class="think-label">Окто размышляет...</span>
+                    <span class="material-icons-round think-chevron">expand_more</span>
+                </div>
+                <div class="think-body"></div>
+            `;
+            div.querySelector('.think-head').addEventListener('click', () => {
+                if (div.classList.contains('done')) div.classList.toggle('expanded');
+            });
+            chatContainer.appendChild(div);
+            chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+            return div;
+        }
+        function finalizeThinkingCard(div, reasoningText) {
+            if (!reasoningText) { div.remove(); return; }
+            div.classList.add('done');
+            div.querySelector('.think-label').textContent = 'Ход размышлений Окто';
+            div.querySelector('.think-body').textContent = reasoningText;
+        }
+
+        /* ======================================================================
+           РЕНДЕР: КАРТОЧКА НАВОДЯЩЕГО ВОПРОСА
+           ====================================================================== */
+        function renderClarifyCard(clarify) {
+            const div = document.createElement('div');
+            div.className = 'clarify-card';
+            const optsHtml = clarify.options.map(opt => `<button class="clarify-opt-btn">${escapeHTML(opt)}</button>`).join('');
+            div.innerHTML = `
+                <div class="clarify-question"><span class="material-icons-round">help_outline</span><span>${escapeHTML(clarify.question)}</span></div>
+                <div class="clarify-options">${optsHtml}</div>
+                <div class="clarify-custom-row">
+                    <input type="text" class="clarify-custom-input" placeholder="Свой вариант ответа...">
+                    <button class="clarify-custom-send"><span class="material-icons-round" style="font-size:18px">send</span></button>
+                </div>
+                <div class="clarify-answered-tag"><span class="material-icons-round">check_circle</span><span>Ответ отправлен</span></div>
+            `;
+            const answer = (val) => {
+                if (!val || !val.trim() || div.classList.contains('answered')) return;
+                div.classList.add('answered');
+                inputField.value = val.trim();
+                sendMessage();
+            };
+            div.querySelectorAll('.clarify-opt-btn').forEach(btn => {
+                btn.addEventListener('click', () => answer(btn.textContent));
+            });
+            const customInput = div.querySelector('.clarify-custom-input');
+            div.querySelector('.clarify-custom-send').addEventListener('click', () => answer(customInput.value));
+            customInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') answer(customInput.value); });
+            chatContainer.appendChild(div);
+            chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+            return div;
+        }
+
+        /* ======================================================================
+           РЕНДЕР: ЧЕК-ЛИСТ ЗАДАЧ
+           ====================================================================== */
+        function renderChecklistCard(checklist) {
+            const div = document.createElement('div');
+            div.className = 'checklist-card';
+            const total = checklist.items.length;
+            const done = checklist.items.filter(i => i.checked).length;
+            const pct = total ? Math.round((done / total) * 100) : 0;
+            div.innerHTML = `
+                <div class="checklist-title"><span class="material-icons-round">checklist</span><span>${escapeHTML(checklist.title)}</span></div>
+                <div class="checklist-progress-track"><div class="checklist-progress-fill" style="width:${pct}%"></div></div>
+                <div class="checklist-items">
+                    ${checklist.items.map(item => `
+                        <div class="checklist-item ${item.checked ? 'checked' : ''}">
+                            <div class="checklist-box"><span class="material-icons-round">check</span></div>
+                            <span class="checklist-item-text">${escapeHTML(item.text)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="checklist-count">${done} из ${total} выполнено</div>
+            `;
+            chatContainer.appendChild(div);
+            chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+            return div;
         }
 
         /* ======================================================================
@@ -837,7 +1259,7 @@
         async function sendMessage() {
             if (isSending) return;
             const text = inputField.value.trim();
-            if (!text) return;
+            if (!text && !attachedFiles.length) return;
 
             let chat = getCurrentChat();
             if (!chat) {
@@ -848,33 +1270,65 @@
             isSending = true;
             sendBtn.classList.add('disabled');
 
-            addMsgToDOM(escapeHTML(text), true);
+            const attachmentNote = attachedFiles.length
+                ? `\n\n📎 Прикреплено: ${attachedFiles.map(f => f.name).join(', ')}`
+                : '';
+            const displayText = escapeHTML(text) + (attachmentNote ? escapeHTML(attachmentNote) : '');
+            addMsgToDOM(displayText, true);
             inputField.value = '';
-            chat.messages.push({ role: 'user', content: text });
-            saveMessageRecord(chat.id, 'user', text);
+
+            // Полный промпт для модели включает содержимое файлов, но в истории
+            // чата храним компактную версию, чтобы не раздувать контекст на будущее.
+            const attachmentContext = buildAttachmentContext();
+            const promptForApi = text + attachmentContext;
+            const usedWebSearch = webSearchEnabled;
+
+            chat.messages.push({ role: 'user', content: text + attachmentNote });
+            saveMessageRecord(chat.id, 'user', text + attachmentNote);
+            attachedFiles = [];
+            renderAttachPreview();
 
             if (chat.messages.filter(m => m.role === 'user').length === 1) {
-                chat.title = text.slice(0, 34) + (text.length > 34 ? '…' : '');
+                chat.title = text.slice(0, 34) + (text.length > 34 ? '…' : '') || 'Файл без текста';
                 chatTitleDisplay.textContent = chat.title;
                 renameChatRecord(chat.id, chat.title);
                 renderChatList();
             }
 
-            setStatus("печатает...", true);
+            const statusLabel = usedWebSearch ? "ищу в интернете..." : "печатает...";
+            setStatus(statusLabel, true);
             const loadingMsg = addMsgToDOM('<div class="dot"></div><div class="dot"></div><div class="dot"></div>', false);
 
             const historyForApi = chat.messages
                 .slice(0, -1)
                 .map(m => ({ role: m.role, content: m.content }));
 
-            const reply = await askAI(text, historyForApi);
+            const data = await askAI(promptForApi, historyForApi);
             loadingMsg.remove();
 
-            const aiMsgBox = addMsgToDOM('', false);
-            await typeText(aiMsgBox, formatText(reply));
+            // Плашка размышлений — показываем, только если модель реально их прислала
+            if (data.reasoning) {
+                const thinkCard = renderThinkingCard();
+                finalizeThinkingCard(thinkCard, data.reasoning);
+            }
 
-            chat.messages.push({ role: 'assistant', content: reply });
-            saveMessageRecord(chat.id, 'assistant', reply);
+            let replyText = data.reply || '';
+            const { cleanText: afterClarify, clarify } = extractClarify(replyText);
+            const { cleanText: finalText, checklist } = extractChecklist(afterClarify);
+
+            if (finalText) {
+                const aiMsgBox = addMsgToDOM('', false);
+                await typeText(aiMsgBox, formatText(finalText));
+            }
+            if (checklist && checklist.items.length) {
+                renderChecklistCard(checklist);
+            }
+            if (clarify && clarify.question) {
+                renderClarifyCard(clarify);
+            }
+
+            chat.messages.push({ role: 'assistant', content: replyText });
+            saveMessageRecord(chat.id, 'assistant', replyText);
 
             setStatus("в сети");
             isSending = false;
@@ -891,6 +1345,7 @@
 
             setStatus("загрузка чатов...", true);
             await loadChats();
+            await loadModelCatalog();
 
             const lastId = localStorage.getItem('octo_last_chat');
             if (lastId && chats.find(c => c.id === lastId)) {
@@ -916,6 +1371,9 @@
         window.createNewChat = createNewChat;
         window.openSidebar = openSidebar;
         window.closeSidebar = closeSidebar;
+        window.toggleWebSearch = toggleWebSearch;
+        window.handleFileAttachment = handleFileAttachment;
+        window.openModelPicker = openModelPicker;
     </script>
 </body>
 </html>
