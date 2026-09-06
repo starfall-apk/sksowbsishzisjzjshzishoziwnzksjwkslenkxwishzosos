@@ -82,6 +82,35 @@ app.get('/api/debug-config', (req, res) => {
     });
 });
 
+// --- Диагностика: прямой нестримовый запрос к Groq, чтобы проверить связку в изоляции ---
+app.get('/api/debug-ping-ai', async (req, res) => {
+    if (!AI_KEY) return res.status(500).json({ error: 'AI_KEY not set' });
+    try {
+        const started = Date.now();
+        const upstream = await fetch(AI_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AI_KEY}` },
+            body: JSON.stringify({
+                model: DEFAULT_MODEL,
+                messages: [{ role: 'user', content: 'Скажи одно слово: привет' }]
+            })
+        });
+        const elapsedMs = Date.now() - started;
+        const text = await upstream.text();
+        let json = null;
+        try { json = JSON.parse(text); } catch (e) {}
+        res.status(200).json({
+            upstreamStatus: upstream.status,
+            elapsedMs,
+            reply: json?.choices?.[0]?.message?.content || null,
+            rawSnippet: text.slice(0, 500)
+        });
+    } catch (err) {
+        console.error('debug-ping-ai failed:', err);
+        res.status(500).json({ error: 'fetch_failed', detail: String(err) });
+    }
+});
+
 // --- Диагностика: какие модели реально доступны твоему ключу (сырой ответ Groq) ---
 app.get('/api/models', async (req, res) => {
     if (!AI_KEY) return res.status(500).json({ error: 'AI_KEY is not set' });
