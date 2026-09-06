@@ -21,13 +21,28 @@ const PORT = process.env.PORT || 3000;
 // --- Секреты храним в переменных окружения Render, а не в коде ---
 const AI_URL = process.env.AI_URL || 'https://api.groq.com/openai/v1/chat/completions';
 const AI_KEY = process.env.AI_KEY || ''; // ОБЯЗАТЕЛЬНО задать в Render → Environment (ключ Groq)
-const AI_MODEL = process.env.AI_MODEL || 'llama-3.3-70b-versatile';
+const AI_MODEL = process.env.AI_MODEL || 'llama-3.1-8b-instant';
 
 const SYSTEM_PROMPT = "Ты — Окто ИИ, дружелюбный и умный ассистент в виде осьминога. Отвечай полезно, по делу и с лёгкой теплотой. Всегда используй Markdown для форматирования ответов: **жирный**, *курсив*, `инлайн-код`, блоки кода с тройными обратными кавычками и указанием языка на первой строке, заголовки # ## ###, ссылки [текст](url), таблицы через | и списки через - или 1. Форматируй даже короткие ответы.";
 
 // --- Healthcheck: Render пингует "/" или отдельный путь, чтобы понять, что сервис жив ---
 app.get('/healthz', (req, res) => {
     res.status(200).json({ status: 'ok', time: new Date().toISOString() });
+});
+
+// --- Диагностика: какие модели реально доступны твоему ключу ---
+// Открой в браузере https://твой-сервис.onrender.com/api/models
+app.get('/api/models', async (req, res) => {
+    if (!AI_KEY) return res.status(500).json({ error: 'AI_KEY is not set' });
+    try {
+        const r = await fetch('https://api.groq.com/openai/v1/models', {
+            headers: { 'Authorization': `Bearer ${AI_KEY}` }
+        });
+        const data = await r.json();
+        res.status(r.status).json(data);
+    } catch (err) {
+        res.status(500).json({ error: 'fetch_failed', detail: String(err) });
+    }
 });
 
 // --- Прокси к Groq AI ---
