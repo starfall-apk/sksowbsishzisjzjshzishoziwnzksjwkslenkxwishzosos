@@ -1,7 +1,9 @@
 // ============================================================
 // Окто ИИ — сервер для Render
-// Раздаёт фронтенд (public/) и проксирует запросы к Pollinations AI,
+// Раздаёт фронтенд (public/) и проксирует запросы к Groq AI,
 // чтобы API-ключ не "светился" в клиентском коде (в apk его легко достать).
+// Groq даёт бесплатный тир (без карты) с OpenAI-совместимым API.
+// Получить ключ: https://console.groq.com/keys
 // ============================================================
 
 const express = require('express');
@@ -17,9 +19,9 @@ app.use(express.json({ limit: '2mb' }));
 const PORT = process.env.PORT || 3000;
 
 // --- Секреты храним в переменных окружения Render, а не в коде ---
-const POLLINATIONS_URL = process.env.POLLINATIONS_URL || 'https://text.pollinations.ai/openai';
-const POLLINATIONS_KEY = process.env.POLLINATIONS_KEY || ''; // задать в Render → Environment
-const POLLINATIONS_MODEL = process.env.POLLINATIONS_MODEL || 'openai';
+const AI_URL = process.env.AI_URL || 'https://api.groq.com/openai/v1/chat/completions';
+const AI_KEY = process.env.AI_KEY || ''; // ОБЯЗАТЕЛЬНО задать в Render → Environment (ключ Groq)
+const AI_MODEL = process.env.AI_MODEL || 'llama-3.3-70b-versatile';
 
 const SYSTEM_PROMPT = "Ты — Окто ИИ, дружелюбный и умный ассистент в виде осьминога. Отвечай полезно, по делу и с лёгкой теплотой. Всегда используй Markdown для форматирования ответов: **жирный**, *курсив*, `инлайн-код`, блоки кода с тройными обратными кавычками и указанием языка на первой строке, заголовки # ## ###, ссылки [текст](url), таблицы через | и списки через - или 1. Форматируй даже короткие ответы.";
 
@@ -28,7 +30,7 @@ app.get('/healthz', (req, res) => {
     res.status(200).json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// --- Прокси к Pollinations AI ---
+// --- Прокси к Groq AI ---
 app.post('/api/chat', async (req, res) => {
     try {
         const { prompt, history } = req.body || {};
@@ -42,18 +44,25 @@ app.post('/api/chat', async (req, res) => {
             { role: 'user', content: prompt }
         ];
 
-        const headers = { 'Content-Type': 'application/json' };
-        if (POLLINATIONS_KEY) headers['Authorization'] = `Bearer ${POLLINATIONS_KEY}`;
+        if (!AI_KEY) {
+            console.error('AI_KEY не задан в переменных окружения Render');
+            return res.status(500).json({ error: 'server_misconfigured', detail: 'AI_KEY is not set' });
+        }
 
-        const upstream = await fetch(POLLINATIONS_URL, {
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${AI_KEY}`
+        };
+
+        const upstream = await fetch(AI_URL, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ model: POLLINATIONS_MODEL, messages, private: true })
+            body: JSON.stringify({ model: AI_MODEL, messages })
         });
 
         if (!upstream.ok) {
             const text = await upstream.text().catch(() => '');
-            console.error('Pollinations error', upstream.status, text);
+            console.error('AI upstream error', upstream.status, text);
             return res.status(502).json({ error: 'upstream_error', status: upstream.status });
         }
 
