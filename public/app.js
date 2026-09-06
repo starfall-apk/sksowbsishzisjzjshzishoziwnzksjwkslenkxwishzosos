@@ -955,14 +955,16 @@ function addMsgToDOM(html, isUser) {
    ЗАПРОС К ИИ-СЕРВЕРУ — потоковый (SSE), с поддержкой отмены (кнопка "стоп")
    ========================================================================== */
 async function askAIStream(prompt, historyMessages, onContentChunk, onReasoningChunk) {
+    // ПРИМЕЧАНИЕ: раньше здесь был потоковый (SSE) запрос к /api/chat/stream,
+    // читающий response.body.getReader(). В WebView (обёртка APK) и за некоторыми
+    // прокси/бесплатными хостингами потоковое чтение fetch-ответа либо не
+    // поддерживается, либо обрывается почти сразу — из-за этого сообщения
+    // переставали отправляться (статус мигал в "подключение..."/"поиск" и
+    // всё зависало). Обычный, нестриминговый /api/chat работает везде надёжно,
+    // поэтому используем его и просто отдаём результат одним куском.
     activeStreamController = new AbortController();
-    let fullReply = '';
-    let fullReasoning = '';
-    let gotError = false;
-    let gotErrorDetail = null;
-
     try {
-        const response = await fetch(BACKEND_CHAT_STREAM_URL, {
+        const response = await fetch(BACKEND_CHAT_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             signal: activeStreamController.signal,
@@ -975,65 +977,36 @@ async function askAIStream(prompt, historyMessages, onContentChunk, onReasoningC
             })
         });
 
-        if (!response.ok || !response.body) throw new Error('HTTP ' + response.status);
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const events = buffer.split('\n\n');
-            buffer = events.pop();
-
-            for (const raw of events) {
-                const lines = raw.split('\n');
-                let eventName = 'message';
-                let dataStr = '';
-                for (const line of lines) {
-                    if (line.startsWith('event:')) eventName = line.slice(6).trim();
-                    if (line.startsWith('data:')) dataStr += line.slice(5).trim();
-                }
-                if (!dataStr) continue;
-                let payload;
-                try { payload = JSON.parse(dataStr); } catch (e) { continue; }
-
-                if (eventName === 'content' && payload.text) {
-                    fullReply += payload.text;
-                    onContentChunk(fullReply);
-                } else if (eventName === 'reasoning' && payload.text) {
-                    fullReasoning += payload.text;
-                    onReasoningChunk(fullReasoning);
-                } else if (eventName === 'error') {
-                    gotError = true;
-                    gotErrorDetail = payload || null;
-                }
-            }
+        if (!response.ok) {
+            let detail = null;
+            try { detail = await response.json(); } catch (e) {}
+            const isMisconfig = detail && detail.error === 'server_misconfigured';
+            const reply = isMisconfig
+                ? "Окто пока не настроен — на сервере не задан ключ ИИ (AI_KEY). Сообщи об этом администратору приложения 🐙"
+                : "Ой, не получилось связаться с сервером ИИ 🐙 Попробуй ещё раз через пару секунд.";
+            return { reply, reasoning: null, error: true };
         }
+
+        const data = await response.json();
+        const reply = data.reply || '';
+        const reasoning = data.reasoning || null;
+
+        // Отдаём результат разом через те же колбэки, чтобы вся логика рендера
+        // (карточка размышлений, печатающийся текст) осталась без изменений.
+        if (reasoning) onReasoningChunk(reasoning);
+        if (reply) onContentChunk(reply);
+
+        return { reply, reasoning };
     } catch (e) {
         if (e.name === 'AbortError') {
-            // Пользователь нажал "стоп" — это не ошибка, отдаём то, что успели получить
-            return { reply: fullReply, reasoning: fullReasoning || null, stopped: true };
+            // Пользователь нажал "стоп"
+            return { reply: '', reasoning: null, stopped: true };
         }
-        console.error('Ошибка стрима', e);
-        if (!fullReply) {
-            return { reply: "Ой, не получилось связаться с сервером ИИ 🐙 Попробуй ещё раз через пару секунд.", reasoning: null, error: true };
-        }
+        console.error('Ошибка запроса к ИИ', e);
+        return { reply: "Ой, не получилось связаться с сервером ИИ 🐙 Попробуй ещё раз через пару секунд.", reasoning: null, error: true };
     } finally {
         activeStreamController = null;
     }
-
-    if (gotError && !fullReply) {
-        console.error('Сервер вернул ошибку по стриму:', gotErrorDetail);
-        const isMisconfig = gotErrorDetail && gotErrorDetail.error === 'server_misconfigured';
-        const reply = isMisconfig
-            ? "Окто пока не настроен — на сервере не задан ключ ИИ (AI_KEY). Сообщи об этом администратору приложения 🐙"
-            : "Ой, не получилось связаться с сервером ИИ 🐙 Попробуй ещё раз через пару секунд.";
-        return { reply, reasoning: null, error: true };
-    }
-    return { reply: fullReply, reasoning: fullReasoning || null };
 }
 
 function stopGeneration() {

@@ -330,6 +330,7 @@ app.post('/api/chat/stream', async (req, res) => {
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
         res.setHeader('Cache-Control', 'no-cache, no-transform');
         res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no'); // отключает буферизацию у некоторых прокси (nginx и т.п.)
         res.flushHeaders?.();
 
         const send = (event, data) => {
