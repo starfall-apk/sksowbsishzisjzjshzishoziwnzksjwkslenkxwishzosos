@@ -188,60 +188,66 @@ app.post('/api/search', async (req, res) => {
 });
 
 /* ============================================================
-   ЧАТ — прокси к Groq, с опциональным веб-поиском и reasoning
+   Общая подготовка запроса к Groq (используется и стрим-, и обычной веткой)
+   ============================================================ */
+async function buildChatRequestBody(req) {
+    const { prompt, history, model, webSearch, systemPromptExtra } = req.body || {};
+    if (!prompt || typeof prompt !== 'string') {
+        throw Object.assign(new Error('prompt is required'), { statusCode: 400 });
+    }
+    if (!AI_KEY) {
+        throw Object.assign(new Error('AI_KEY is not set'), { statusCode: 500, code: 'server_misconfigured' });
+    }
+
+    const chosenModel = (model && MODEL_CATALOG.some(m => m.id === model)) ? model : DEFAULT_MODEL;
+    const supportsReasoning = REASONING_CAPABLE_MODELS.has(chosenModel);
+
+    let searchContext = '';
+    let usedSearchResults = null;
+    if (webSearch) {
+        try {
+            const results = await searchWeb(prompt, 5);
+            usedSearchResults = results;
+            if (results.length) {
+                searchContext = '\n\nРезультаты веб-поиска по запросу пользователя (используй их для ответа, если релевантны, и не забудь упомянуть источники своими словами):\n' +
+                    results.map((r, i) => `${i + 1}. ${r.title} — ${r.snippet} (${r.link})`).join('\n');
+            }
+        } catch (e) {
+            console.error('Web search failed, continuing without it:', e);
+        }
+    }
+
+    // Кастомный промпт пользователя (настройки → персонализация ИИ) добавляется
+    // ПОСЛЕ базового системного, чтобы не ломать формат [CLARIFY]/[CHECKLIST].
+    const extra = (typeof systemPromptExtra === 'string' && systemPromptExtra.trim())
+        ? '\n\nДополнительные пожелания пользователя к стилю общения:\n' + systemPromptExtra.trim().slice(0, 2000)
+        : '';
+
+    const messages = [
+        { role: 'system', content: SYSTEM_PROMPT + searchContext + extra },
+        ...(Array.isArray(history) ? history.slice(-16) : []),
+        { role: 'user', content: prompt }
+    ];
+
+    const body = { model: chosenModel, messages };
+    if (supportsReasoning) {
+        body.reasoning_format = 'parsed';
+        body.reasoning_effort = 'medium';
+    }
+
+    return { body, chosenModel, usedSearchResults };
+}
+
+/* ============================================================
+   ЧАТ (обычный, без стрима) — прокси к Groq, оставлен для совместимости
    ============================================================ */
 app.post('/api/chat', async (req, res) => {
     try {
-        const { prompt, history, model, webSearch } = req.body || {};
-        if (!prompt || typeof prompt !== 'string') {
-            return res.status(400).json({ error: 'prompt is required' });
-        }
-
-        if (!AI_KEY) {
-            console.error('AI_KEY не задан в переменных окружения Render');
-            return res.status(500).json({ error: 'server_misconfigured', detail: 'AI_KEY is not set' });
-        }
-
-        const chosenModel = (model && MODEL_CATALOG.some(m => m.id === model)) ? model : DEFAULT_MODEL;
-        const supportsReasoning = REASONING_CAPABLE_MODELS.has(chosenModel);
-
-        let searchContext = '';
-        let usedSearchResults = null;
-        if (webSearch) {
-            try {
-                const results = await searchWeb(prompt, 5);
-                usedSearchResults = results;
-                if (results.length) {
-                    searchContext = '\n\nРезультаты веб-поиска по запросу пользователя (используй их для ответа, если релевантны, и не забудь упомянуть источники своими словами):\n' +
-                        results.map((r, i) => `${i + 1}. ${r.title} — ${r.snippet} (${r.link})`).join('\n');
-                }
-            } catch (e) {
-                console.error('Web search failed, continuing without it:', e);
-            }
-        }
-
-        const messages = [
-            { role: 'system', content: SYSTEM_PROMPT + searchContext },
-            ...(Array.isArray(history) ? history.slice(-16) : []),
-            { role: 'user', content: prompt }
-        ];
-
-        const body = { model: chosenModel, messages };
-        if (supportsReasoning) {
-            // reasoning_format=parsed отдаёт отдельное поле message.reasoning,
-            // не смешивая его с финальным ответом
-            body.reasoning_format = 'parsed';
-            body.reasoning_effort = 'medium';
-        }
-
-        const headers = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${AI_KEY}`
-        };
+        const { body, chosenModel, usedSearchResults } = await buildChatRequestBody(req);
 
         const upstream = await fetch(AI_URL, {
             method: 'POST',
-            headers,
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AI_KEY}` },
             body: JSON.stringify(body)
         });
 
@@ -263,8 +269,91 @@ app.post('/api/chat', async (req, res) => {
             searchResults: usedSearchResults
         });
     } catch (err) {
+        if (err.statusCode) return res.status(err.statusCode).json({ error: err.code || 'bad_request', detail: err.message });
         console.error('Chat proxy error:', err);
         res.status(500).json({ error: 'server_error' });
+    }
+});
+
+/* ============================================================
+   ЧАТ (потоковый, SSE) — позволяет фронтенду показывать текст по мере
+   генерации и по-настоящему ОСТАНАВЛИВАТЬ генерацию кнопкой "стоп"
+   (просто закрывается соединение / прерывается upstream-запрос).
+   ============================================================ */
+app.post('/api/chat/stream', async (req, res) => {
+    let upstreamController = new AbortController();
+    req.on('close', () => upstreamController.abort());
+
+    try {
+        const { body, chosenModel, usedSearchResults } = await buildChatRequestBody(req);
+        body.stream = true;
+
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders?.();
+
+        const send = (event, data) => {
+            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        };
+
+        send('meta', { model: chosenModel, searchResults: usedSearchResults });
+
+        const upstream = await fetch(AI_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AI_KEY}` },
+            body: JSON.stringify(body),
+            signal: upstreamController.signal
+        });
+
+        if (!upstream.ok || !upstream.body) {
+            const text = await upstream.text().catch(() => '');
+            console.error('AI upstream error', upstream.status, text);
+            send('error', { error: 'upstream_error', status: upstream.status });
+            return res.end();
+        }
+
+        const reader = upstream.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // последняя (возможно неполная) строка остаётся в буфере
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || !trimmed.startsWith('data:')) continue;
+                const payload = trimmed.slice(5).trim();
+                if (payload === '[DONE]') continue;
+                try {
+                    const json = JSON.parse(payload);
+                    const delta = json?.choices?.[0]?.delta || {};
+                    if (delta.content) send('content', { text: delta.content });
+                    if (delta.reasoning) send('reasoning', { text: delta.reasoning });
+                } catch (e) { /* игнорируем неполные фрагменты */ }
+            }
+        }
+
+        send('done', {});
+        res.end();
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            // клиент нажал "стоп" или разорвал соединение — это ожидаемо, не ошибка
+            return res.end();
+        }
+        if (err.statusCode) {
+            res.write(`event: error\ndata: ${JSON.stringify({ error: err.code || 'bad_request', detail: err.message })}\n\n`);
+            return res.end();
+        }
+        console.error('Chat stream error:', err);
+        try {
+            res.write(`event: error\ndata: ${JSON.stringify({ error: 'server_error' })}\n\n`);
+        } catch (e) {}
+        res.end();
     }
 });
 
