@@ -21,7 +21,7 @@ const PORT = process.env.PORT || 3000;
 // --- Секреты храним в переменных окружения Render, а не в коде ---
 const AI_URL = process.env.AI_URL || 'https://api.groq.com/openai/v1/chat/completions';
 const AI_KEY = process.env.AI_KEY || ''; // ОБЯЗАТЕЛЬНО задать в Render → Environment (ключ Groq)
-const AI_MODEL = process.env.AI_MODEL || 'llama-3.1-8b-instant';
+const AI_MODEL = process.env.AI_MODEL || 'openai/gpt-oss-20b';
 
 const SYSTEM_PROMPT = "Ты — Окто ИИ, дружелюбный и умный ассистент в виде осьминога. Отвечай полезно, по делу и с лёгкой теплотой. Всегда используй Markdown для форматирования ответов: **жирный**, *курсив*, `инлайн-код`, блоки кода с тройными обратными кавычками и указанием языка на первой строке, заголовки # ## ###, ссылки [текст](url), таблицы через | и списки через - или 1. Форматируй даже короткие ответы.";
 
