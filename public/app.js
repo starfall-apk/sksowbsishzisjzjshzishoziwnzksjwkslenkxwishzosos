@@ -71,9 +71,11 @@ let activeStreamController = null; // AbortController для текущего з
 let modelCatalog = [];
 let selectedModel = null;
 let webSearchEnabled = false;
+let imageGenEnabled = false;
 let attachedFiles = []; // { name, content, kind: 'text' | 'zip-listing' }
 const attachPreviewBar = document.getElementById('attach-preview-bar');
 const websearchPill = document.getElementById('websearch-pill');
+const imagegenPill = document.getElementById('imagegen-pill');
 const modelPillLabel = document.getElementById('model-pill-label');
 
 /* ==========================================================================
@@ -388,6 +390,23 @@ function openModelPicker() {
 function toggleWebSearch() {
     webSearchEnabled = !webSearchEnabled;
     websearchPill.classList.toggle('active', webSearchEnabled);
+    if (webSearchEnabled && imageGenEnabled) {
+        imageGenEnabled = false;
+        imagegenPill.classList.remove('active');
+    }
+}
+
+/* ==========================================================================
+   ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (переключатель) — бесплатно, без API-ключа (Pollinations)
+   ========================================================================== */
+function toggleImageGen() {
+    imageGenEnabled = !imageGenEnabled;
+    imagegenPill.classList.toggle('active', imageGenEnabled);
+    inputField.placeholder = imageGenEnabled ? 'Опиши картинку, которую нарисовать...' : 'Спроси что-нибудь у Окто...';
+    if (imageGenEnabled && webSearchEnabled) {
+        webSearchEnabled = false;
+        websearchPill.classList.remove('active');
+    }
 }
 
 /* ==========================================================================
@@ -1312,10 +1331,121 @@ function autoResizeInput() {
     inputField.style.height = Math.min(inputField.scrollHeight, 140) + 'px';
 }
 
+/* ==========================================================================
+   РЕНДЕР: ЖИВАЯ КАРТОЧКА ГЕНЕРАЦИИ ИЗОБРАЖЕНИЯ
+   ========================================================================== */
+function renderImageGenCard(prompt) {
+    const div = document.createElement('div');
+    div.className = 'imagegen-card';
+    div.innerHTML = `
+        <div class="imagegen-head">
+            <span class="material-icons-round">auto_awesome</span>
+            <span class="imagegen-head-label">${escapeHTML(prompt)}</span>
+        </div>
+        <div class="imagegen-frame">
+            <img alt="${escapeHTML(prompt)}">
+            <div class="imagegen-shimmer"><div class="imagegen-orb"></div></div>
+            <div class="imagegen-progress-label">Окто рисует...</div>
+            <div class="imagegen-error-text">
+                <span class="material-icons-round">broken_image</span>
+                <span>Не получилось нарисовать 🐙<br>Попробуй ещё раз</span>
+            </div>
+        </div>
+        <div class="imagegen-actions">
+            <button class="save-btn imagegen-save"><span class="material-icons-round" style="font-size:14px">download</span>Сохранить</button>
+        </div>
+    `;
+    chatContainer.appendChild(div);
+    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+    return div;
+}
+
+function finalizeImageGenCard(div, imageUrl, prompt) {
+    const frame = div.querySelector('.imagegen-frame');
+    const img = frame.querySelector('img');
+    const actions = div.querySelector('.imagegen-actions');
+    img.onload = () => {
+        frame.classList.add('done');
+        img.classList.add('loaded');
+        actions.classList.add('show');
+    };
+    img.onerror = () => {
+        frame.classList.add('error');
+    };
+    img.src = imageUrl;
+    const saveBtn = div.querySelector('.imagegen-save');
+    saveBtn.addEventListener('click', async () => {
+        try {
+            const resp = await fetch(imageUrl);
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = (prompt || 'octo-image').slice(0, 40).replace(/[^\p{L}\p{N}_-]+/gu, '_') + '.jpg';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            showToast('Картинка сохранена', 'download_done');
+        } catch (e) {
+            showToast('Не удалось сохранить картинку', 'error_outline');
+        }
+    });
+}
+
+async function generateImage(prompt) {
+    const url = `/api/image?prompt=${encodeURIComponent(prompt)}`;
+    // Просто отдаём URL — сам <img> инициирует загрузку и обработает успех/ошибку.
+    return url;
+}
+
+async function sendImageGenMessage(prompt) {
+    let chat = getCurrentChat();
+    if (!chat) {
+        await createNewChat();
+        chat = getCurrentChat();
+    }
+
+    isSending = true;
+    setSendButtonMode('stop');
+
+    addMsgToDOM(escapeHTMLWithBreaks(prompt), true);
+    inputField.value = '';
+    autoResizeInput();
+
+    chat.messages.push({ role: 'user', content: prompt });
+    saveMessageRecord(chat.id, 'user', prompt);
+
+    if (chat.messages.filter(m => m.role === 'user').length === 1) {
+        chat.title = prompt.slice(0, 34) + (prompt.length > 34 ? '…' : '') || 'Картинка';
+        chatTitleDisplay.textContent = chat.title;
+        renameChatRecord(chat.id, chat.title);
+        renderChatList();
+    }
+
+    setStatus('рисует картинку...', true);
+    const card = renderImageGenCard(prompt);
+    const imageUrl = await generateImage(prompt);
+    finalizeImageGenCard(card, imageUrl, prompt);
+
+    const markdownContent = `![${prompt.replace(/[[\]]/g, '')}](${imageUrl})`;
+    chat.messages.push({ role: 'assistant', content: markdownContent });
+    saveMessageRecord(chat.id, 'assistant', markdownContent);
+
+    setStatus('в сети');
+    isSending = false;
+    setSendButtonMode('idle');
+}
+
 async function sendMessage() {
     if (isSending) return;
     const text = inputField.value.trim();
     if (!text && !attachedFiles.length) return;
+
+    if (imageGenEnabled && text) {
+        await sendImageGenMessage(text);
+        return;
+    }
 
     let chat = getCurrentChat();
     if (!chat) {

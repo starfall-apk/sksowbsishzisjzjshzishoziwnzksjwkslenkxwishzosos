@@ -462,6 +462,7 @@
         @keyframes blink { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
 
         .status-badge { display: flex; align-items: center; gap: 6px; }
+        #status { display: inline-flex; align-items: center; gap: 6px; }
         .loading-spinner { width: 11px; height: 11px; border: 2px solid rgba(255,122,48,0.25); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; flex-shrink: 0; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -494,16 +495,18 @@
 
         /* ---------- ПЛАШКА «РАЗМЫШЛЕНИЯ» ---------- */
         .think-card {
-            align-self: flex-start; max-width: 92%; background: var(--glass); border: 1px solid var(--border);
+            align-self: flex-start; width: fit-content; min-width: 220px; max-width: 92%;
+            background: var(--glass); border: 1px solid var(--border);
             border-radius: 16px; overflow: hidden; animation: pop 0.3s ease;
+            flex-shrink: 0;
         }
         .think-head {
             display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer;
-            transition: background 0.15s;
+            transition: background 0.15s; min-width: 0;
         }
         .think-head:hover { background: rgba(255,255,255,0.03); }
         .think-avatar {
-            width: 22px; height: 22px; border-radius: 8px; flex-shrink: 0;
+            width: 22px; height: 22px; border-radius: 8px; flex: 0 0 22px;
             background: linear-gradient(135deg, var(--accent), #ffb37a);
             display: flex; align-items: center; justify-content: center;
             animation: thinkPulse 1.8s ease-in-out infinite;
@@ -513,10 +516,14 @@
             0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255,122,48,0.35); }
             50% { transform: scale(1.08); box-shadow: 0 0 0 6px rgba(255,122,48,0); }
         }
-        .think-label { font-size: 12.5px; color: var(--text-dim); flex: 1; animation: labelFade 2.4s ease-in-out infinite; }
+        .think-label {
+            font-size: 12.5px; color: var(--text-dim); flex: 1 1 auto; min-width: 60px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            animation: labelFade 2.4s ease-in-out infinite;
+        }
         .think-card.done .think-label { animation: none; opacity: 0.6; }
         @keyframes labelFade { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.9; } }
-        .think-chevron { transition: transform 0.25s ease; opacity: 0.5; font-size: 18px !important; }
+        .think-chevron { transition: transform 0.25s ease; opacity: 0.5; font-size: 18px !important; flex: 0 0 18px; }
         .think-card.expanded .think-chevron { transform: rotate(180deg); }
         .think-body {
             max-height: 0; overflow: hidden; transition: max-height 0.3s ease;
@@ -524,6 +531,78 @@
             padding: 0 14px; font-family: 'Fira Code', monospace;
         }
         .think-card.expanded .think-body { max-height: 400px; overflow-y: auto; padding: 0 14px 14px; }
+
+        /* ---------- КАРТОЧКА ГЕНЕРАЦИИ ИЗОБРАЖЕНИЯ ---------- */
+        .imagegen-card {
+            align-self: flex-start; max-width: 92%; width: 320px;
+            border-radius: 20px; overflow: hidden; animation: pop 0.3s ease;
+            border: 1px solid var(--border); background: var(--glass);
+            position: relative;
+        }
+        .imagegen-head {
+            display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+            font-size: 12.5px; color: var(--text-dim); min-width: 0;
+        }
+        .imagegen-head .material-icons-round { font-size: 16px; color: var(--accent); flex: 0 0 16px; }
+        .imagegen-head-label { flex: 1 1 auto; min-width: 40px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .imagegen-frame {
+            position: relative; width: 100%; aspect-ratio: 1 / 1;
+            background: linear-gradient(135deg, var(--bg-grad-1), var(--bg-grad-2));
+            overflow: hidden;
+        }
+        .imagegen-frame img {
+            position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+            opacity: 0; transform: scale(1.04); filter: blur(6px);
+            transition: opacity 0.7s ease, transform 0.7s ease, filter 0.7s ease;
+        }
+        .imagegen-frame img.loaded { opacity: 1; transform: scale(1); filter: blur(0); }
+        /* Мерцающая "заготовка" пока картинка генерируется — переливается цветами акцента темы */
+        .imagegen-shimmer {
+            position: absolute; inset: 0;
+            background:
+                radial-gradient(circle at 30% 30%, var(--accent-soft), transparent 60%),
+                radial-gradient(circle at 70% 70%, var(--accent-soft), transparent 60%),
+                linear-gradient(120deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.16) 45%, rgba(255,255,255,0.05) 60%);
+            background-size: 200% 200%, 200% 200%, 250% 100%;
+            animation: shimmerDrift 3.2s ease-in-out infinite, shimmerSweep 1.8s linear infinite;
+            display: flex; align-items: center; justify-content: center;
+            transition: opacity 0.4s ease;
+        }
+        .imagegen-frame.done .imagegen-shimmer { opacity: 0; pointer-events: none; }
+        @keyframes shimmerDrift {
+            0%, 100% { background-position: 0% 0%, 100% 100%, 0% 0%; }
+            50% { background-position: 100% 100%, 0% 0%, 0% 0%; }
+        }
+        @keyframes shimmerSweep { 0% { background-position: 0% 0%, 0% 0%, -150% 0; } 100% { background-position: 0% 0%, 0% 0%, 150% 0; } }
+        .imagegen-orb {
+            width: 46px; height: 46px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent), #ffffff55);
+            box-shadow: 0 0 24px 6px var(--accent-soft), 0 0 0 1px rgba(255,255,255,0.15) inset;
+            animation: orbPulse 1.6s ease-in-out infinite;
+        }
+        @keyframes orbPulse {
+            0%, 100% { transform: scale(0.85); opacity: 0.75; }
+            50% { transform: scale(1.05); opacity: 1; }
+        }
+        .imagegen-progress-label {
+            position: absolute; left: 0; right: 0; bottom: 12px; text-align: center;
+            font-size: 11.5px; color: var(--text); opacity: 0.85; letter-spacing: 0.2px;
+            text-shadow: 0 1px 6px rgba(0,0,0,0.5);
+        }
+        .imagegen-frame.done .imagegen-progress-label { display: none; }
+        .imagegen-frame.error .imagegen-shimmer { animation: none; background: rgba(255,80,80,0.08); }
+        .imagegen-frame.error .imagegen-orb { display: none; }
+        .imagegen-error-text {
+            position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+            flex-direction: column; gap: 6px; text-align: center; padding: 20px; font-size: 12.5px; color: var(--text-dim);
+        }
+        .imagegen-frame.error .imagegen-error-text { display: flex; }
+        .imagegen-error-text .material-icons-round { font-size: 26px; color: var(--accent); opacity: 0.7; }
+        .imagegen-actions {
+            display: none; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border);
+        }
+        .imagegen-actions.show { display: flex; }
+        .imagegen-actions .save-btn, .imagegen-actions .copy-btn { flex: 1; justify-content: center; }
 
         /* ---------- КАРТОЧКА НАВОДЯЩЕГО ВОПРОСА ---------- */
         .clarify-card {
@@ -702,6 +781,10 @@
                     <div class="opt-pill" id="websearch-pill" onclick="toggleWebSearch()">
                         <span class="material-icons-round">travel_explore</span>
                         <span>Поиск в интернете</span>
+                    </div>
+                    <div class="opt-pill" id="imagegen-pill" onclick="toggleImageGen()">
+                        <span class="material-icons-round">auto_awesome</span>
+                        <span>Картинка</span>
                     </div>
                     <div class="opt-pill" id="attach-pill" onclick="document.getElementById('file-attach-input').click()">
                         <span class="material-icons-round">attach_file</span>

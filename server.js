@@ -156,6 +156,54 @@ app.get('/api/model-list', (req, res) => {
 });
 
 /* ============================================================
+   ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ — бесплатно, без API-ключа.
+   Проксируем на Pollinations (image.pollinations.ai) — публичный
+   бесплатный сервис генерации картинок, ключ не нужен вообще.
+   Проксируем через сервер (а не бьём прямо с фронта), чтобы:
+   - в APK-обёртке не было проблем со смешанным контентом/CORS;
+   - при желании было куда потом подставить свой ключ/лимиты.
+   ============================================================ */
+const POLLINATIONS_IMAGE_URL = process.env.POLLINATIONS_IMAGE_URL || 'https://image.pollinations.ai/prompt';
+
+app.get('/api/image', async (req, res) => {
+    const prompt = (req.query.prompt || '').toString().trim();
+    if (!prompt) return res.status(400).json({ error: 'prompt_required' });
+    if (prompt.length > 800) return res.status(400).json({ error: 'prompt_too_long' });
+
+    // Разумные значения по умолчанию + жёсткие пределы, чтобы не злоупотребляли
+    const width = Math.min(Math.max(parseInt(req.query.width, 10) || 1024, 256), 1536);
+    const height = Math.min(Math.max(parseInt(req.query.height, 10) || 1024, 256), 1536);
+    const seed = req.query.seed ? parseInt(req.query.seed, 10) : Math.floor(Math.random() * 1_000_000_000);
+    const model = (req.query.model || 'flux').toString().replace(/[^a-z0-9-]/gi, '') || 'flux';
+
+    const upstreamUrl = `${POLLINATIONS_IMAGE_URL}/${encodeURIComponent(prompt)}` +
+        `?width=${width}&height=${height}&seed=${seed}&model=${model}&nologo=true&safe=true`;
+
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 60_000);
+        req.on('close', () => { clearTimeout(timeout); controller.abort(); });
+
+        const upstream = await fetch(upstreamUrl, { signal: controller.signal });
+        clearTimeout(timeout);
+
+        if (!upstream.ok) {
+            console.error('Pollinations image error', upstream.status);
+            return res.status(502).json({ error: 'upstream_error', status: upstream.status });
+        }
+
+        res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        const arrayBuffer = await upstream.arrayBuffer();
+        res.status(200).send(Buffer.from(arrayBuffer));
+    } catch (err) {
+        if (err.name === 'AbortError') return res.status(504).json({ error: 'timeout' });
+        console.error('Image proxy error:', err);
+        res.status(500).json({ error: 'server_error' });
+    }
+});
+
+/* ============================================================
    РУЧНОЙ ВЕБ-ПОИСК — без API-ключей, скрейпинг HTML-версии DuckDuckGo
    ============================================================ */
 const COMMON_SCRAPE_HEADERS = {
