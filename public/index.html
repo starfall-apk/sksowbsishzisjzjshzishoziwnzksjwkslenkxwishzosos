@@ -14,6 +14,10 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <!-- JSZip — чтение содержимого .zip файлов прямо в браузере -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- marked — надёжный парсер Markdown (таблицы, цитаты, списки с любым стартовым номером, hr и т.д.) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+    <!-- DOMPurify — санитайзер HTML, чтобы отрендеренный markdown не мог принести XSS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js"></script>
     <style>
         /* ==========================================================
            ТЕМЫ ОФОРМЛЕНИЯ
@@ -259,13 +263,45 @@
         .msg a:hover { opacity: 0.8; }
         .msg code:not(pre code) { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 6px; font-family: 'Fira Code', monospace; font-size: 0.9em; }
 
-        .msg table { border-collapse: collapse; margin: 10px 0; width: 100%; font-size: 14px; }
+        /* Таблицы: заворачиваем в скроллящийся контейнер со скруглёнными углами,
+           чтобы они не вылезали за края пузыря сообщения на узких экранах. */
+        .msg .table-scroll {
+            margin: 10px 0; max-width: 100%; overflow-x: auto; border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        .msg .table-scroll::-webkit-scrollbar { height: 6px; }
+        .msg .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+        .msg table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: max-content; }
         .msg th, .msg td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
         .msg th { background: rgba(255,255,255,0.08); font-weight: 600; }
+        .msg tr:last-child td { border-bottom: none; }
 
-        .msg ul, .msg ol { margin: 10px 0; padding-left: 25px; }
-        .msg li { margin-bottom: 4px; }
-        .msg h1, .msg h2, .msg h3 { margin: 12px 0 6px; line-height: 1.3; }
+        .msg ul, .msg ol { margin: 6px 0; padding-left: 24px; }
+        .msg li { margin-bottom: 2px; }
+        .msg li > p { margin: 4px 0; }
+        .msg li::marker { color: var(--text-dim); }
+        .msg h1, .msg h2, .msg h3 { margin: 14px 0 6px; line-height: 1.3; }
+        .msg h1:first-child, .msg h2:first-child, .msg h3:first-child { margin-top: 0; }
+        .msg p { margin: 6px 0; }
+        .msg p:first-child { margin-top: 0; }
+        .msg p:last-child { margin-bottom: 0; }
+
+        /* Цитаты ">" */
+        .msg blockquote {
+            margin: 10px 0; padding: 4px 14px; border-left: 3px solid var(--accent);
+            color: var(--text-dim); background: rgba(255,255,255,0.03); border-radius: 0 8px 8px 0;
+        }
+        .msg blockquote p { margin: 4px 0; }
+
+        /* Разделитель "---" */
+        .msg hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+
+        .msg strong { font-weight: 700; }
+        .msg del { opacity: 0.6; }
+        .msg li.task-list-item { list-style: none; margin-left: -20px; }
+        .msg li.task-list-item input[type="checkbox"] {
+            margin-right: 8px; accent-color: var(--accent); width: 15px; height: 15px; vertical-align: middle;
+        }
 
         .modal-overlay {
             position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(20px);
@@ -342,9 +378,23 @@
         .textarea-field {
             width: 100%; background: var(--glass); border: 1px solid var(--border); border-radius: 14px;
             padding: 13px 14px; color: var(--text); font-size: 13.5px; outline: none; font-family: 'Inter', sans-serif;
-            resize: vertical; min-height: 90px; line-height: 1.5;
+            resize: none; min-height: 90px; line-height: 1.5;
         }
+        /* Убираем нативный "уголок" ресайза у textarea (белая точка в углу) —
+           поля растягиваются автоматически по контенту через JS вместо этого. */
+        textarea { resize: none; }
+        textarea::-webkit-resizer { display: none; }
         .textarea-field:focus { border-color: rgba(255,122,48,0.5); }
+
+        /* ---------- КАСТОМНЫЙ СКРОЛЛБАР ПО ВСЕМУ ПРИЛОЖЕНИЮ ---------- */
+        /* Firefox */
+        * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+        /* Chrome/Safari/WebView — закруглённый, под цвет темы, вместо стандартного серого прямоугольного */
+        ::-webkit-scrollbar { width: 7px; height: 7px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); background-clip: padding-box; }
+        ::-webkit-scrollbar-corner { background: transparent; }
         .textarea-field.mono { font-family: 'Fira Code', monospace; font-size: 13px; }
 
         .terms-box { text-align: left; background: rgba(255,255,255,0.02); padding: 20px; border-radius: 16px; font-size: 13px; max-height: 300px; overflow-y: auto; margin-bottom: 20px; border: 1px solid var(--border); line-height: 1.6; color: #ccc; }
@@ -503,17 +553,31 @@
         .clarify-card.answered .clarify-options,
         .clarify-card.answered .clarify-custom-row { display: none; }
         .clarify-answered-tag {
-            display: none; align-items: center; gap: 6px; font-size: 12px; color: var(--accent); opacity: 0.85;
+            display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--accent); opacity: 0.85;
         }
-        .clarify-card.answered .clarify-answered-tag { display: flex; }
         .clarify-answered-tag .material-icons-round { font-size: 14px; }
+        .clarify-progress { font-size: 11px; color: var(--text-dim); opacity: 0.7; margin-bottom: -2px; }
+        .clarify-summary { display: flex; flex-direction: column; gap: 10px; }
+        .clarify-summary-item { display: flex; flex-direction: column; gap: 3px; }
+        .clarify-summary-q { font-size: 12.5px; color: var(--text-dim); }
+        .clarify-summary-a { font-size: 13.5px; font-weight: 500; }
 
-        /* ---------- ЧЕК-ЛИСТ ЗАДАЧ ---------- */
-        .checklist-card {
-            align-self: flex-start; max-width: 92%; background: var(--glass); border: 1px solid var(--border);
-            border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
-            animation: pop 0.3s ease; min-width: 240px;
+        /* ---------- ЧЕК-ЛИСТ ЗАДАЧ — ЗАКРЕПЛЁННАЯ ПАНЕЛЬ НАД ПОЛЕМ ВВОДА ----------
+           Это отдельный блок в потоке (не поверх чата по z-index), поэтому сообщения
+           в #chat никогда не оказываются перекрыты — они просто заканчиваются выше,
+           а панель всегда прижата к полю ввода и не двигается при скролле истории. */
+        .checklist-panel-wrap {
+            flex-shrink: 0; max-height: 0; overflow: hidden; padding: 0 12px;
+            transition: max-height 0.3s ease, padding 0.3s ease;
         }
+        .checklist-panel-wrap.visible { max-height: 260px; padding: 8px 12px 0; }
+        .checklist-panel-wrap .checklist-card { max-height: 240px; overflow-y: auto; }
+        .checklist-card {
+            background: var(--glass); border: 1px solid var(--border);
+            border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+            min-width: 240px; backdrop-filter: blur(20px);
+        }
+        .checklist-item-text p { display: inline; margin: 0; }
         .checklist-title { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; }
         .checklist-title .material-icons-round { font-size: 17px; color: var(--accent); }
         .checklist-progress-track { height: 4px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; }
@@ -627,6 +691,8 @@
         </header>
 
         <div id="chat"></div>
+
+        <div id="checklist-panel" class="checklist-panel-wrap"></div>
 
         <div class="input-area-wrap">
             <div class="input-card">
@@ -784,7 +850,7 @@
                         <div class="setting-row">
                             <div class="setting-row-text">
                                 <div class="setting-row-title">Долгосрочная память</div>
-                                <div class="setting-row-desc">Окто запоминает факты о тебе между разными чатами (имя, предпочтения, контекст)</div>
+                                <div class="setting-row-desc">Окто сам замечает и запоминает факты о тебе прямо во время переписки (имя, предпочтения, контекст) и использует их в других чатах</div>
                             </div>
                             <label class="switch">
                                 <input type="checkbox" id="opt-longmem" onchange="saveAiPrefs()">
@@ -794,7 +860,7 @@
                     </div>
                     <div class="settings-group" style="padding: 14px 12px;">
                         <div class="setting-row-title" style="margin-bottom:4px;">Что помнит Окто</div>
-                        <div class="setting-row-desc" style="margin-bottom:10px;">Список фактов, добавленных вручную или найденных в переписке. Можно редактировать напрямую.</div>
+                        <div class="setting-row-desc" style="margin-bottom:10px;">Факты, которые Окто нашёл сам в переписке, плюс всё, что ты допишешь сюда вручную.</div>
                         <textarea class="textarea-field mono" id="memory-facts" placeholder="- Зовут Александр&#10;- Работает с Python и JS&#10;- Предпочитает короткие объяснения" oninput="saveMemoryDebounced()"></textarea>
                     </div>
                     <button class="modal-btn danger" onclick="clearMemory()">Очистить память</button>

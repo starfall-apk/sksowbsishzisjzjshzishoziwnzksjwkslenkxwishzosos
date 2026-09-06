@@ -53,6 +53,7 @@ const DEVICE_ID = getDeviceId();
 const chatContainer = document.getElementById('chat');
 const inputField = document.getElementById('input');
 const sendBtn = document.getElementById('send-btn');
+const checklistPanelEl = document.getElementById('checklist-panel');
 const sendBtnIcon = document.getElementById('send-btn-icon');
 const statusSpan = document.getElementById('status');
 const chatListEl = document.getElementById('chat-list');
@@ -123,7 +124,7 @@ function loadAiPrefs() {
         concise: !!prefs.concise,
         tone: prefs.tone || 'friendly',
         customPrompt: prefs.customPrompt || '',
-        longMemory: !!prefs.longMemory
+        longMemory: prefs.longMemory !== false
     };
 }
 function saveAiPrefs() {
@@ -157,6 +158,38 @@ function clearMemory() {
     localStorage.removeItem('octo_memory_facts');
     document.getElementById('memory-facts').value = '';
     showToast('Память очищена', 'check_circle');
+}
+
+// Автоматически объединяет новые факты (пришедшие от модели через [REMEMBER])
+// с уже сохранёнными — без дублей, в формате списка "- факт".
+const MAX_MEMORY_FACTS = 60;
+function saveMemoryFactsAuto(newFacts) {
+    if (!loadAiPrefs().longMemory) return; // пользователь выключил долгосрочную память
+    if (!newFacts || !newFacts.length) return;
+
+    const existingRaw = loadMemoryFacts();
+    const existingLines = existingRaw.split('\n').map(l => l.replace(/^-\s*/, '').trim()).filter(Boolean);
+    const existingLower = new Set(existingLines.map(l => l.toLowerCase()));
+
+    let added = false;
+    newFacts.forEach(fact => {
+        const clean = fact.trim();
+        if (!clean) return;
+        if (existingLower.has(clean.toLowerCase())) return;
+        existingLines.push(clean);
+        existingLower.add(clean.toLowerCase());
+        added = true;
+    });
+    if (!added) return;
+
+    // Не даём списку расти бесконечно — оставляем самые свежие факты.
+    const trimmed = existingLines.slice(-MAX_MEMORY_FACTS);
+    const serialized = trimmed.map(l => '- ' + l).join('\n');
+    localStorage.setItem('octo_memory_facts', serialized);
+
+    // Если настройки открыты прямо сейчас — обновим текстовое поле вживую.
+    const textarea = document.getElementById('memory-facts');
+    if (textarea) textarea.value = serialized;
 }
 
 /* Собирает дополнение к системному промпту на основе настроек ИИ.
@@ -679,17 +712,42 @@ function renderCurrentChat() {
     if (!chat) {
         chatTitleDisplay.textContent = 'Окто ИИ';
         showEmptyState();
+        renderChecklistPanel(null);
         return;
     }
     chatTitleDisplay.textContent = chat.title || 'Новый чат';
     if (!chat.messages.length) {
         showEmptyState();
+        renderChecklistPanel(null);
         return;
     }
     chat.messages.forEach(m => {
-        addMsgToDOM(m.role === 'user' ? escapeHTML(m.content) : formatText(m.content), m.role === 'user');
+        if (m.role === 'user') {
+            // Сообщения-ответы на уточняющие вопросы (формат "Q: ...\nA: ...")
+            // показываем как восстановленную карточку-сводку, а не сырым текстом.
+            const answeredCard = /^Q:\s*.+\nA:\s*/.test(m.content) ? renderAnsweredClarifySummary(m.content) : null;
+            if (answeredCard) {
+                chatContainer.appendChild(answeredCard);
+            } else {
+                addMsgToDOM(escapeHTMLWithBreaks(m.content), true);
+            }
+            return;
+        }
+        // В сообщениях ассистента вырезаем служебные блоки — [CLARIFY] и [REMEMBER]
+        // никогда не остаются в видимом тексте. Чек-лист — особый случай: пока он
+        // активен (не завершён), его показывает закреплённая панель, поэтому здесь
+        // он вырезается; а как только он завершён полностью, он "остаётся в истории"
+        // как обычное отформatированное сообщение (см. п.8 требований).
+        const { cleanText: afterRemember } = extractRemember(m.content);
+        const { cleanText: afterClarify } = extractClarify(afterRemember);
+        const { cleanText: visibleText, checklist } = extractChecklist(afterClarify);
+        const textToShow = (checklist && checklist.completed)
+            ? afterClarify.replace(/\[CHECKLIST(?:\s+title="([^"]*)")?\]([\s\S]*?)\[\/CHECKLIST\]/, renderCompletedChecklistAsMarkdown(checklist))
+            : visibleText;
+        if (textToShow) addMsgToDOM(formatText(textToShow), false);
     });
     chatContainer.scrollTo({ top: chatContainer.scrollHeight });
+    refreshChecklistPanel();
 }
 
 function showEmptyState() {
@@ -750,140 +808,98 @@ function guessFileName(lang, code) {
     return 'snippet.' + ext;
 }
 
-function formatText(text) {
-    const codeBlocks = [];
-    const inlineCodes = [];
-
-    // Полные блоки кода: ```lang\n...\n```
-    text = text.replace(/```([\s\S]*?)```/g, (match, content) => {
-        const lines = content.split('\n');
-        let lang = '';
-        let code = content;
-        if (lines.length > 0 && /^[a-zA-Z0-9+#.-]+$/.test(lines[0].trim()) && !lines[0].trim().includes(' ')) {
-            lang = lines[0].trim();
-            code = lines.slice(1).join('\n');
-        }
-        return pushCodeBlock(codeBlocks, lang, code, true);
-    });
-
-    // Незакрытый блок кода в конце текста (модель ещё печатает) — рендерим как
-    // код "вживую", а не оставляем голые ``` посреди сообщения.
-    text = text.replace(/```([\s\S]*)$/, (match, content) => {
-        const lines = content.split('\n');
-        let lang = '';
-        let code = content;
-        if (lines.length > 0 && /^[a-zA-Z0-9+#.-]+$/.test(lines[0].trim()) && !lines[0].trim().includes(' ')) {
-            lang = lines[0].trim();
-            code = lines.slice(1).join('\n');
-        }
-        return pushCodeBlock(codeBlocks, lang, code, false);
-    });
-
-    text = text.replace(/`([^`]+)`/g, (match, code) => {
-        const escaped = escapeHTML(code);
-        const placeholder = `%%INLINECODE_${inlineCodes.length}%%`;
-        inlineCodes.push({ placeholder, html: `<code>${escaped}</code>` });
-        return placeholder;
-    });
-
-    text = text.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
-    text = text.replace(/\*(.*?)\*/g, '<i>$1</i>');
-    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-    text = text.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    text = text.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    text = text.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-    const lines = text.split('\n');
-    const outputLines = [];
-    let i = 0;
-    while (i < lines.length) {
-        const line = lines[i];
-        const ulMatch = line.match(/^[\-\*\+] (.*)/);
-        const olMatch = line.match(/^(\d+)\. (.*)/);
-        if (ulMatch || olMatch) {
-            const items = [];
-            const isOrdered = !!olMatch;
-            while (i < lines.length && (ulMatch ? lines[i].match(/^[\-\*\+] /) : lines[i].match(/^\d+\. /))) {
-                const m = isOrdered ? lines[i].match(/^\d+\. (.*)/) : lines[i].match(/^[\-\*\+] (.*)/);
-                if (m) items.push(m[1]);
-                i++;
-            }
-            const tag = isOrdered ? 'ol' : 'ul';
-            outputLines.push(`<${tag}>`);
-            items.forEach(item => outputLines.push(`<li>${item}</li>`));
-            outputLines.push(`</${tag}>`);
-            continue;
-        }
-
-        if (line.trim().startsWith('|')) {
-            const tableLines = [];
-            while (i < lines.length && lines[i].trim().startsWith('|')) {
-                tableLines.push(lines[i]);
-                i++;
-            }
-            let headerRow = null;
-            let bodyRows = [];
-            if (tableLines.length >= 2 && /^[\|\s\-:]+$/.test(tableLines[1].replace(/\|/g, '').trim())) {
-                headerRow = tableLines[0];
-                bodyRows = tableLines.slice(2);
-            } else {
-                bodyRows = tableLines;
-            }
-            const htmlTable = ['<table>'];
-            if (headerRow) {
-                htmlTable.push('<thead><tr>');
-                headerRow.split('|').filter(c => c.trim() !== '').forEach(cell => {
-                    htmlTable.push(`<th>${cell.trim()}</th>`);
-                });
-                htmlTable.push('</tr></thead>');
-            }
-            if (bodyRows.length) {
-                htmlTable.push('<tbody>');
-                bodyRows.forEach(row => {
-                    htmlTable.push('<tr>');
-                    row.split('|').filter(c => c.trim() !== '').forEach(cell => {
-                        htmlTable.push(`<td>${cell.trim()}</td>`);
-                    });
-                    htmlTable.push('</tr>');
-                });
-                htmlTable.push('</tbody>');
-            }
-            htmlTable.push('</table>');
-            outputLines.push(htmlTable.join(''));
-            continue;
-        }
-
-        outputLines.push(line);
-        i++;
-    }
-    text = outputLines.join('\n');
-    text = text.replace(/\n/g, '<br>');
-
-    inlineCodes.forEach(({ placeholder, html }) => { text = text.replace(placeholder, html); });
-    codeBlocks.forEach(({ placeholder, html }) => { text = text.replace(placeholder, html); });
-
-    return text;
-}
-
-function pushCodeBlock(codeBlocks, lang, code, closed) {
+/* Настройка marked: используем встроенный парсер (таблицы, цитаты ">", "---",
+   нумерованные списки с любым стартовым числом, гибкая вложенность и т.д.)
+   вместо хрупкого набора regex-ов, который не умел половину Markdown. */
+const octoMarkedRenderer = new marked.Renderer();
+const pendingCodeBlocks = [];
+octoMarkedRenderer.code = function (codeArg, infoArg) {
+    // marked v12 передаёт объект { text, lang } в некоторых сборках CDN —
+    // подстраховываемся под оба варианта вызова.
+    const code = (codeArg && typeof codeArg === 'object') ? codeArg.text : codeArg;
+    const lang = (codeArg && typeof codeArg === 'object') ? codeArg.lang : infoArg;
     const id = 'code-' + Math.random().toString(36).substr(2, 9);
-    const escapedCode = escapeHTML(code.trim());
-    const placeholder = `%%BLOCKCODE_${codeBlocks.length}%%`;
-    const fileName = guessFileName(lang, code);
-    codeBlocks.push({
-        placeholder,
-        html: `<div class="code-container">
+    const escapedCode = escapeHTML((code || '').replace(/\n$/, ''));
+    const fileName = guessFileName(lang, code || '');
+    return `<div class="code-container">
             <div class="code-header">
-                <span class="code-lang">${escapeHTML(lang || 'code')}${closed ? '' : ' · пишет...'}</span>
+                <span class="code-lang">${escapeHTML(lang || 'code')}</span>
                 <div class="code-header-actions">
                     <button class="save-btn" data-code-id="${id}" data-filename="${escapeHTML(fileName)}"><span class="material-icons-round">download</span>Сохранить</button>
                     <button class="copy-btn" data-code-id="${id}">Copy</button>
                 </div>
             </div>
             <pre><code id="${id}" class="${lang ? 'language-' + lang.toLowerCase() : ''}">${escapedCode}</code></pre>
-        </div>`
+        </div>`;
+};
+// Ссылки открываем в новой вкладке
+octoMarkedRenderer.link = function (hrefArg, titleArg, textArg) {
+    const href = (hrefArg && typeof hrefArg === 'object') ? hrefArg.href : hrefArg;
+    const text = (hrefArg && typeof hrefArg === 'object') ? hrefArg.text : textArg;
+    return `<a href="${escapeHTML(href || '')}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+};
+marked.setOptions({
+    renderer: octoMarkedRenderer,
+    breaks: true,       // одиночный перенос строки = <br>, как в чатах
+    gfm: true,           // таблицы, зачёркивание ~~текст~~, автоссылки и т.д.
+});
+
+function escapeHTML(str) {
+    return String(str).replace(/[&<>"']/g, (m) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'}[m]));
+}
+// Для пользовательских сообщений: экранируем HTML, но сохраняем переносы строк
+// (например, у комбинированного ответа на несколько уточняющих вопросов Q:/A:).
+function escapeHTMLWithBreaks(str) {
+    return escapeHTML(str).replace(/\n/g, '<br>');
+}
+
+function guessFileName(lang, code) {
+    const ext = {
+        javascript: 'js', js: 'js', typescript: 'ts', ts: 'ts', python: 'py', py: 'py',
+        html: 'html', css: 'css', json: 'json', bash: 'sh', sh: 'sh', shell: 'sh',
+        java: 'java', c: 'c', cpp: 'cpp', 'c++': 'cpp', go: 'go', golang: 'go', rust: 'rs',
+        php: 'php', ruby: 'rb', sql: 'sql', yaml: 'yml', yml: 'yml', xml: 'xml', markdown: 'md', md: 'md'
+    }[(lang || '').toLowerCase()] || (lang ? lang.toLowerCase() : 'txt');
+
+    if (ext === 'html') return 'index.html';
+    if (ext === 'py') return 'main.py';
+    if (ext === 'js') return 'main.js';
+    if (ext === 'ts') return 'main.ts';
+    if (ext === 'css') return 'style.css';
+    if (ext === 'json') return 'data.json';
+    return 'snippet.' + ext;
+}
+
+/* Если модель ещё печатает и оборвалась посреди блока кода (нечётное число ```),
+   закрываем его виртуально, чтобы marked не сломал разметку всего остального
+   сообщения из-за одного незакрытого блока. */
+function closeDanglingCodeFence(text) {
+    const fenceCount = (text.match(/```/g) || []).length;
+    if (fenceCount % 2 !== 0) {
+        return text + '\n```';
+    }
+    return text;
+}
+
+function formatText(text) {
+    const safeText = closeDanglingCodeFence(text || '');
+    let html;
+    try {
+        html = marked.parse(safeText);
+    } catch (e) {
+        console.error('Ошибка парсинга markdown, показываю как есть:', e);
+        html = `<p>${escapeHTML(text || '')}</p>`;
+    }
+    // Оборачиваем таблицы в скроллящийся контейнер, чтобы широкие таблицы
+    // не вылезали за края пузыря сообщения на телефоне.
+    html = html.replace(/<table>/g, '<div class="table-scroll"><table>').replace(/<\/table>/g, '</table></div>');
+
+    // Санитайзим итоговый HTML — на случай если модель прислала «сырой» HTML
+    // внутри ответа. Оставляем классы/id, они нужны кнопкам код-блоков.
+    return DOMPurify.sanitize(html, {
+        ADD_ATTR: ['target', 'rel'],
+        ADD_TAGS: ['button']
     });
-    return placeholder;
 }
 
 async function typeText(element, html) {
@@ -1018,16 +1034,40 @@ function stopGeneration() {
 /* ==========================================================================
    ПАРСИНГ СПЕЦИАЛЬНЫХ БЛОКОВ ОТВЕТА: [CLARIFY] и [CHECKLIST]
    ========================================================================== */
+// Собирает ВСЕ блоки [CLARIFY]...[/CLARIFY] из ответа (модель может задать
+// несколько уточняющих вопросов подряд одним блоком, как в Claude).
 function extractClarify(text) {
-    const match = text.match(/\[CLARIFY\]([\s\S]*?)\[\/CLARIFY\]/);
-    if (!match) return { cleanText: text, clarify: null };
-    const block = match[1];
-    const qMatch = block.match(/Q:\s*(.+)/);
-    const options = Array.from(block.matchAll(/O:\s*(.+)/g)).map(m => m[1].trim()).filter(Boolean);
-    const clarify = qMatch ? { question: qMatch[1].trim(), options } : null;
-    const cleanText = text.replace(match[0], '').trim();
+    const blocks = Array.from(text.matchAll(/\[CLARIFY\]([\s\S]*?)\[\/CLARIFY\]/g));
+    if (!blocks.length) return { cleanText: text, clarify: null };
+    const questions = blocks.map(m => {
+        const block = m[1];
+        const qMatch = block.match(/Q:\s*(.+)/);
+        const options = Array.from(block.matchAll(/O:\s*(.+)/g)).map(o => o[1].trim()).filter(Boolean);
+        return qMatch ? { question: qMatch[1].trim(), options } : null;
+    }).filter(Boolean);
+    let cleanText = text;
+    blocks.forEach(m => { cleanText = cleanText.replace(m[0], ''); });
+    cleanText = cleanText.trim();
+    const clarify = questions.length ? { questions } : null;
     return { cleanText, clarify };
 }
+
+// Достаёт факты для долгосрочной памяти из блока [REMEMBER]...[/REMEMBER],
+// который модель добавляет сама, когда узнаёт что-то устойчивое о пользователе.
+function extractRemember(text) {
+    const match = text.match(/\[REMEMBER\]([\s\S]*?)\[\/REMEMBER\]/);
+    if (!match) return { cleanText: text, facts: [] };
+    const facts = match[1].split('\n').map(l => l.replace(/^-\s*/, '').trim()).filter(Boolean);
+    const cleanText = text.replace(match[0], '').trim();
+    return { cleanText, facts };
+}
+// Когда чек-лист выполнен полностью, превращаем его в обычный markdown-текст
+// (GFM task list), который останется частью истории чата как любое сообщение.
+function renderCompletedChecklistAsMarkdown(checklist) {
+    const lines = checklist.items.map(i => `- [x] ${i.text}`).join('\n');
+    return `**✅ ${checklist.title}**\n\n${lines}`;
+}
+
 function extractChecklist(text) {
     const match = text.match(/\[CHECKLIST(?:\s+title="([^"]*)")?\]([\s\S]*?)\[\/CHECKLIST\]/);
     if (!match) return { cleanText: text, checklist: null };
@@ -1038,7 +1078,26 @@ function extractChecklist(text) {
         text: m[2].trim()
     }));
     const cleanText = text.replace(match[0], '').trim();
-    return { cleanText, checklist: { title, items } };
+    const completed = items.length > 0 && items.every(i => i.checked);
+    return { cleanText, checklist: { title, items, completed } };
+}
+
+// Сканирует всю историю чата и находит ПОСЛЕДНИЙ блок [CHECKLIST] среди
+// сообщений ИИ. Это и есть "активный" чек-лист — благодаря этому: (1) в один
+// момент времени существует только один чек-лист (панель просто обновляется),
+// (2) при перезаходе в чат панель воссоздаётся из истории, а не остаётся
+// сырым текстом. Если последний найденный чек-лист выполнен полностью —
+// активного чек-листа нет (он уже "стал историей").
+function findActiveChecklist(messages) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.role !== 'assistant') continue;
+        const { checklist } = extractChecklist(m.content);
+        if (checklist) {
+            return checklist.completed ? null : checklist;
+        }
+    }
+    return null;
 }
 
 /* ==========================================================================
@@ -1065,71 +1124,170 @@ function renderThinkingCard() {
 function updateThinkingCard(div, reasoningText) {
     div.querySelector('.think-body').textContent = reasoningText;
 }
+// ВАЖНО: ответ сервера приходит целиком, а не по кусочкам, поэтому карточка
+// размышлений больше не "стримится" — вместо того чтобы мелькнуть на долю
+// секунды и тут же схлопнуться (это и был баг с "полосками"), сразу
+// показываем её в раскрытом виде на несколько секунд, чтобы текст успели
+// прочитать, и только потом сворачиваем — сворачивание не "теряет" текст,
+// по клику её всегда можно развернуть обратно.
+const THINK_CARD_AUTOCOLLAPSE_MS = 3500;
 function finalizeThinkingCard(div, reasoningText) {
     if (!reasoningText) { div.remove(); return; }
-    div.classList.add('done');
     div.querySelector('.think-label').textContent = 'Ход размышлений Окто';
     div.querySelector('.think-body').textContent = reasoningText;
+    div.classList.add('done', 'expanded');
+    clearTimeout(div._collapseTimer);
+    div._collapseTimer = setTimeout(() => {
+        // Не сворачиваем, если пользователь сам взаимодействовал с карточкой в это время
+        if (!div._userToggled) div.classList.remove('expanded');
+    }, THINK_CARD_AUTOCOLLAPSE_MS);
+    div.querySelector('.think-head').addEventListener('click', () => { div._userToggled = true; }, { once: true });
 }
 
 /* ==========================================================================
    РЕНДЕР: КАРТОЧКА НАВОДЯЩЕГО ВОПРОСА
    ========================================================================== */
+// Рендерит одну или несколько последовательных карточек-вопросов (как в Claude):
+// пользователь отвечает на каждый вопрос по очереди, а когда ответит на все —
+// в чат уходит ОДНО сообщение вида:
+// Q: вопрос
+// A: ответ
+// Q: вопрос
+// A: ответ
 function renderClarifyCard(clarify) {
-    const div = document.createElement('div');
-    div.className = 'clarify-card';
-    const optsHtml = clarify.options.map(opt => `<button class="clarify-opt-btn">${escapeHTML(opt)}</button>`).join('');
-    div.innerHTML = `
-        <div class="clarify-question"><span class="material-icons-round">help_outline</span><span>${escapeHTML(clarify.question)}</span></div>
-        <div class="clarify-options">${optsHtml}</div>
-        <div class="clarify-custom-row">
-            <input type="text" class="clarify-custom-input" placeholder="Свой вариант ответа...">
-            <button class="clarify-custom-send"><span class="material-icons-round" style="font-size:18px">send</span></button>
-        </div>
-        <div class="clarify-answered-tag"><span class="material-icons-round">check_circle</span><span>Ответ отправлен</span></div>
-    `;
-    const answer = (val) => {
-        if (!val || !val.trim() || div.classList.contains('answered')) return;
-        div.classList.add('answered');
-        inputField.value = val.trim();
+    const questions = clarify.questions || [];
+    if (!questions.length) return null;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'clarify-card';
+    wrap.dataset.step = '0';
+    const answers = new Array(questions.length).fill(null);
+
+    const renderStep = (stepIdx) => {
+        const q = questions[stepIdx];
+        const optsHtml = q.options.map(opt => `<button class="clarify-opt-btn">${escapeHTML(opt)}</button>`).join('');
+        const progress = questions.length > 1
+            ? `<div class="clarify-progress">Вопрос ${stepIdx + 1} из ${questions.length}</div>`
+            : '';
+        wrap.innerHTML = `
+            ${progress}
+            <div class="clarify-question"><span class="material-icons-round">help_outline</span><span>${escapeHTML(q.question)}</span></div>
+            <div class="clarify-options">${optsHtml}</div>
+            <div class="clarify-custom-row">
+                <input type="text" class="clarify-custom-input" placeholder="Свой вариант ответа...">
+                <button class="clarify-custom-send"><span class="material-icons-round" style="font-size:18px">send</span></button>
+            </div>
+        `;
+        const answer = (val) => {
+            if (!val || !val.trim()) return;
+            answers[stepIdx] = val.trim();
+            if (stepIdx + 1 < questions.length) {
+                wrap.dataset.step = String(stepIdx + 1);
+                renderStep(stepIdx + 1);
+            } else {
+                finishClarify();
+            }
+        };
+        wrap.querySelectorAll('.clarify-opt-btn').forEach(btn => {
+            btn.addEventListener('click', () => answer(btn.textContent));
+        });
+        const customInput = wrap.querySelector('.clarify-custom-input');
+        wrap.querySelector('.clarify-custom-send').addEventListener('click', () => answer(customInput.value));
+        customInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') answer(customInput.value); });
+    };
+
+    const finishClarify = () => {
+        wrap.classList.add('answered');
+        const combined = questions.map((q, i) => `Q: ${q.question}\nA: ${answers[i]}`).join('\n');
+        // Показываем в самой карточке короткий отчёт вместо полей ввода —
+        // и при перезаходе в чат карточка восстановится в этом же виде (см. renderCurrentChat).
+        wrap.innerHTML = `
+            <div class="clarify-answered-tag"><span class="material-icons-round">check_circle</span><span>Ответ отправлен</span></div>
+            <div class="clarify-summary">${questions.map((q, i) => `
+                <div class="clarify-summary-item">
+                    <div class="clarify-summary-q">${escapeHTML(q.question)}</div>
+                    <div class="clarify-summary-a">${escapeHTML(answers[i])}</div>
+                </div>
+            `).join('')}</div>
+        `;
+        inputField.value = combined;
         sendMessage();
     };
-    div.querySelectorAll('.clarify-opt-btn').forEach(btn => {
-        btn.addEventListener('click', () => answer(btn.textContent));
-    });
-    const customInput = div.querySelector('.clarify-custom-input');
-    div.querySelector('.clarify-custom-send').addEventListener('click', () => answer(customInput.value));
-    customInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') answer(customInput.value); });
-    chatContainer.appendChild(div);
+
+    renderStep(0);
+    chatContainer.appendChild(wrap);
     chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+    return wrap;
+}
+
+// Восстанавливает уже отвеченную карточку из сохранённой истории чата (см. п.5:
+// раньше при перезаходе форматирование/карточка пропадали и оставался сырой текст).
+function renderAnsweredClarifySummary(answersText) {
+    // answersText — это как раз "Q: ...\nA: ...\n..." сообщение пользователя,
+    // сохранённое в истории. Разбираем его обратно в пары вопрос/ответ.
+    const pairs = [];
+    const lines = answersText.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+        const qm = lines[i].match(/^Q:\s*(.+)/);
+        if (qm && lines[i + 1] && lines[i + 1].match(/^A:\s*/)) {
+            pairs.push({ question: qm[1].trim(), answer: lines[i + 1].replace(/^A:\s*/, '').trim() });
+            i++;
+        }
+    }
+    if (!pairs.length) return null;
+    const div = document.createElement('div');
+    div.className = 'clarify-card answered';
+    div.innerHTML = `
+        <div class="clarify-answered-tag"><span class="material-icons-round">check_circle</span><span>Ответ отправлен</span></div>
+        <div class="clarify-summary">${pairs.map(p => `
+            <div class="clarify-summary-item">
+                <div class="clarify-summary-q">${escapeHTML(p.question)}</div>
+                <div class="clarify-summary-a">${escapeHTML(p.answer)}</div>
+            </div>
+        `).join('')}</div>
+    `;
     return div;
 }
 
 /* ==========================================================================
-   РЕНДЕР: ЧЕК-ЛИСТ ЗАДАЧ
+   ЧЕК-ЛИСТ ЗАДАЧ — ЗАКРЕПЛЁННАЯ ПАНЕЛЬ (не сообщение в чате)
+   Живёт прямо над полем ввода и не двигается при скролле чата. Пока чек-лист
+   не завершён полностью, новый создать нельзя — панель просто обновляется.
+   Как только все пункты отмечены — панель прячется и чек-лист остаётся в
+   истории как обычное сообщение ассистента (см. sendMessage/renderCurrentChat).
    ========================================================================== */
-function renderChecklistCard(checklist) {
-    const div = document.createElement('div');
-    div.className = 'checklist-card';
+function renderChecklistPanel(checklist) {
+    if (!checklist || !checklist.items.length) {
+        checklistPanelEl.classList.remove('visible');
+        checklistPanelEl.innerHTML = '';
+        return;
+    }
     const total = checklist.items.length;
     const done = checklist.items.filter(i => i.checked).length;
     const pct = total ? Math.round((done / total) * 100) : 0;
-    div.innerHTML = `
-        <div class="checklist-title"><span class="material-icons-round">checklist</span><span>${escapeHTML(checklist.title)}</span></div>
-        <div class="checklist-progress-track"><div class="checklist-progress-fill" style="width:${pct}%"></div></div>
-        <div class="checklist-items">
-            ${checklist.items.map(item => `
-                <div class="checklist-item ${item.checked ? 'checked' : ''}">
-                    <div class="checklist-box"><span class="material-icons-round">check</span></div>
-                    <span class="checklist-item-text">${escapeHTML(item.text)}</span>
-                </div>
-            `).join('')}
+    checklistPanelEl.innerHTML = `
+        <div class="checklist-card">
+            <div class="checklist-title"><span class="material-icons-round">checklist</span><span>${escapeHTML(checklist.title)}</span></div>
+            <div class="checklist-progress-track"><div class="checklist-progress-fill" style="width:${pct}%"></div></div>
+            <div class="checklist-items">
+                ${checklist.items.map(item => `
+                    <div class="checklist-item ${item.checked ? 'checked' : ''}">
+                        <div class="checklist-box"><span class="material-icons-round">check</span></div>
+                        <span class="checklist-item-text">${formatText(item.text)}</span>
+                    </div>
+                `).join('')}
+            </div>
+            <div class="checklist-count">${done} из ${total} выполнено</div>
         </div>
-        <div class="checklist-count">${done} из ${total} выполнено</div>
     `;
-    chatContainer.appendChild(div);
-    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-    return div;
+    checklistPanelEl.classList.add('visible');
+}
+
+// Пересчитывает активный чек-лист из истории текущего чата и обновляет панель.
+function refreshChecklistPanel() {
+    const chat = getCurrentChat();
+    const checklist = chat ? findActiveChecklist(chat.messages) : null;
+    renderChecklistPanel(checklist);
 }
 
 /* ==========================================================================
@@ -1171,7 +1329,7 @@ async function sendMessage() {
     const attachmentNote = attachedFiles.length
         ? `\n\n📎 Прикреплено: ${attachedFiles.map(f => f.name).join(', ')}`
         : '';
-    const displayText = escapeHTML(text) + (attachmentNote ? escapeHTML(attachmentNote) : '');
+    const displayText = escapeHTMLWithBreaks(text) + (attachmentNote ? escapeHTMLWithBreaks(attachmentNote) : '');
     addMsgToDOM(displayText, true);
     inputField.value = '';
     autoResizeInput();
@@ -1218,10 +1376,13 @@ async function sendMessage() {
             promptForApi,
             historyForApi,
             (fullText) => {
-                // потоковое обновление текста ответа (без спецблоков — их вырежем в конце)
+                // Ответ пришёл целиком (не по кусочкам) — сразу показываем очищенный от
+                // служебных блоков текст, чтобы [REMEMBER]/[CLARIFY]/[CHECKLIST] не
+                // мелькали на экране даже на долю секунды.
                 ensureAiBox();
-                const { cleanText } = extractClarify(fullText);
-                const { cleanText: visibleText } = extractChecklist(cleanText);
+                const { cleanText: afterRemember } = extractRemember(fullText);
+                const { cleanText: afterClarify } = extractClarify(afterRemember);
+                const { cleanText: visibleText } = extractChecklist(afterClarify);
                 aiMsgBox.innerHTML = formatText(visibleText) + '<span class="cursor"></span>';
                 chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
             },
@@ -1238,8 +1399,14 @@ async function sendMessage() {
     }
 
     let replyText = data.reply || '';
-    const { cleanText: afterClarify, clarify } = extractClarify(replyText);
-    const { cleanText: finalText, checklist } = extractChecklist(afterClarify);
+    const { cleanText: afterRemember, facts } = extractRemember(replyText);
+    const { cleanText: afterClarify, clarify } = extractClarify(afterRemember);
+    const { cleanText: finalTextRaw, checklist } = extractChecklist(afterClarify);
+    // Если чек-лист в этом самом ответе только что стал полностью выполненным —
+    // показываем его как обычный текст сообщения (пункт 8: он "остаётся в истории").
+    const finalText = (checklist && checklist.completed)
+        ? (finalTextRaw ? finalTextRaw + '\n\n' : '') + renderCompletedChecklistAsMarkdown(checklist)
+        : finalTextRaw;
 
     if (thinkCard) finalizeThinkingCard(thinkCard, data.reasoning);
 
@@ -1256,17 +1423,23 @@ async function sendMessage() {
         aiMsgBox.remove();
     }
 
-    if (checklist && checklist.items.length) {
-        renderChecklistCard(checklist);
-    }
-    if (clarify && clarify.question && !data.stopped) {
+    // Чек-лист живёт в закреплённой панели над полем ввода, а не как сообщение
+    // в ленте чата — панель просто пересчитывается из истории (см. ниже, после
+    // того как этот ответ уже сохранён в chat.messages).
+    if (clarify && clarify.questions && clarify.questions.length && !data.stopped) {
         renderClarifyCard(clarify);
     }
 
     if (replyText) {
+        // В историю сохраняем ПОЛНЫЙ ответ (включая [CHECKLIST]/[REMEMBER] блоки) —
+        // это и есть единственный источник правды для восстановления панели чек-листа
+        // и памяти при перезаходе в чат.
         chat.messages.push({ role: 'assistant', content: replyText + (data.stopped ? '\n\n_(остановлено пользователем)_' : '') });
         saveMessageRecord(chat.id, 'assistant', replyText);
     }
+
+    if (facts.length) saveMemoryFactsAuto(facts);
+    refreshChecklistPanel();
 
     setStatus(data.stopped ? "остановлено" : "в сети");
     isSending = false;
