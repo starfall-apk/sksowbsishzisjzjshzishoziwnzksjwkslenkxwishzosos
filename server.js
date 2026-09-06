@@ -346,6 +346,9 @@ app.post('/api/chat/stream', async (req, res) => {
             return res.end();
         }
         if (err.statusCode) {
+            // ВАЖНО: логируем и эти ошибки тоже (например AI_KEY не задан на Render) —
+            // иначе в логах пусто, а на клиенте просто исчезает "печатает" без объяснений.
+            console.error('Chat stream error (handled):', err.statusCode, err.code || '', err.message);
             res.write(`event: error\ndata: ${JSON.stringify({ error: err.code || 'bad_request', detail: err.message })}\n\n`);
             return res.end();
         }
@@ -367,4 +370,8 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Окто ИИ сервер запущен на порту ${PORT}`);
+    if (!AI_KEY) {
+        console.warn('⚠️  ВНИМАНИЕ: переменная окружения AI_KEY не задана! Чат работать не будет.');
+        console.warn('⚠️  Задай её в Render → Settings → Environment → AI_KEY (ключ с https://console.groq.com/keys)');
+    }
 });
