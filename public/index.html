@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Окто ИИ — чат</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie_light.min.js"></script>
+    <!-- Supabase (бесплатная база данных) -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root {
+            --bg: #050505;
+            --glass: rgba(255, 255, 255, 0.04);
+            --glass-strong: rgba(255,255,255,0.08);
+            --border: rgba(255, 255, 255, 0.08);
+            --text: #fff;
+            --accent: #ff7a30;
+            --accent-soft: rgba(255,122,48,0.14);
+            --code-bg: #121212;
+            --danger: #ff4444;
+            --link: #ff9c5e;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        html, body { height: 100%; }
+        body { background: var(--bg); color: var(--text); height: 100dvh; display: flex; overflow: hidden; position: fixed; width: 100%; }
+
+        .bg { position: fixed; inset: 0; z-index: -1; filter: blur(100px); }
+        .s1 { position: absolute; width: 300px; height: 300px; background: #7a3d1c; top: -10%; left: -10%; border-radius: 50%; opacity: 0.4; }
+        .s2 { position: absolute; width: 250px; height: 250px; background: #7a5a1c; bottom: 10%; right: -10%; border-radius: 50%; opacity: 0.3; }
+
+        /* ---------- САЙДБАР СО СПИСКОМ ЧАТОВ ---------- */
+        #sidebar {
+            width: 280px;
+            min-width: 280px;
+            background: rgba(10,10,10,0.6);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            transition: margin-left 0.25s ease;
+            z-index: 30;
+        }
+        #sidebar.collapsed { margin-left: -280px; }
+        .sidebar-header { padding: 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+        .sidebar-brand { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+        .brand-avatar { width: 34px; height: 34px; border-radius: 10px; background: var(--accent-soft); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; }
+        .brand-avatar .material-icons-round { color: var(--accent); font-size: 18px; }
+        .sidebar-brand-text { min-width: 0; }
+        .sidebar-brand-text p { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sidebar-brand-text span { font-size: 11px; opacity: 0.5; }
+        .icon-btn { background: none; border: none; color: var(--text); opacity: 0.7; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 10px; transition: all 0.2s; flex-shrink: 0; }
+        .icon-btn:hover { opacity: 1; background: var(--glass); }
+
+        .new-chat-btn {
+            margin: 12px 14px 8px;
+            background: var(--accent-soft);
+            border: 1px solid rgba(255,122,48,0.3);
+            color: var(--accent);
+            border-radius: 14px;
+            padding: 12px 14px;
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .new-chat-btn:hover { background: rgba(255,122,48,0.22); }
+
+        #chat-list { flex: 1; overflow-y: auto; padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; }
+        #chat-list::-webkit-scrollbar { width: 4px; }
+        #chat-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+
+        .chat-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 11px 12px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.15s;
+            position: relative;
+        }
+        .chat-item:hover { background: var(--glass); }
+        .chat-item.active { background: var(--accent-soft); }
+        .chat-item .material-icons-round.chat-ico { font-size: 18px; opacity: 0.5; flex-shrink: 0; }
+        .chat-item.active .chat-ico { color: var(--accent); opacity: 1; }
+        .chat-title { flex: 1; min-width: 0; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.9; }
+        .chat-item.active .chat-title { opacity: 1; font-weight: 500; }
+        .chat-del {
+            opacity: 0; background: none; border: none; color: #aaa; cursor: pointer;
+            width: 26px; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+            transition: all 0.15s; flex-shrink: 0;
+        }
+        .chat-item:hover .chat-del { opacity: 0.6; }
+        .chat-del:hover { opacity: 1 !important; background: rgba(255,68,68,0.15); color: var(--danger); }
+        .chat-del .material-icons-round { font-size: 16px; }
+
+        .chat-list-empty { padding: 30px 16px; text-align: center; font-size: 13px; opacity: 0.4; }
+
+        .sidebar-footer { padding: 12px 14px; border-top: 1px solid var(--border); }
+        .db-status { display: flex; align-items: center; gap: 8px; font-size: 11px; opacity: 0.5; padding: 6px 2px; }
+        .db-dot { width: 7px; height: 7px; border-radius: 50%; background: #666; flex-shrink: 0; }
+        .db-dot.ok { background: #4caf7d; }
+        .db-dot.err { background: var(--danger); }
+
+        #sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 25; }
+        #sidebar-overlay.show { display: block; }
+
+        /* ---------- ОСНОВНАЯ ЗОНА ЧАТА ---------- */
+        #main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; }
+
+        header.topbar { padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); z-index: 10; gap: 12px; }
+        .user-info { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .avatar { width: 40px; height: 40px; background: var(--accent-soft); border-radius: 12px; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-weight: bold; overflow: hidden; flex-shrink: 0; }
+        .avatar .material-icons-round { color: var(--accent); }
+        .topbar-title { min-width: 0; }
+        .topbar-title p.name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .settings-btn { background: none; border: none; color: var(--text); cursor: pointer; opacity: 0.7; transition: all 0.2s; display: flex; align-items: center; }
+        .settings-btn:hover { opacity: 1; transform: rotate(45deg); }
+        .topbar-actions { display: flex; align-items: center; gap: 6px; }
+
+        #send-btn {
+            width: 48px; height: 48px; background: var(--accent); border-radius: 18px; border: none;
+            display: flex; align-items: center; justify-content: center;
+            transition: transform 0.1s ease-out; cursor: pointer;
+        }
+        #send-btn:active { transform: scale(1.15); }
+        #send-btn.disabled { opacity: 0.5; pointer-events: none; transform: none; }
+
+        #chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        #chat::-webkit-scrollbar { display: none; }
+
+        .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px; gap: 6px; }
+        .empty-octo { width: 160px; height: 160px; }
+        .empty-state h3 { font-size: 1.3rem; font-weight: 600; margin-top: 4px; }
+        .empty-state p { opacity: 0.55; font-size: 14px; max-width: 280px; }
+
+        .msg { max-width: 90%; padding: 12px 16px; border-radius: 18px; font-size: 15px; line-height: 1.5; animation: pop 0.3s ease; word-wrap: break-word; }
+        @keyframes pop { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .user { align-self: flex-end; background: var(--accent); color: #180b00; border-bottom-right-radius: 4px; }
+        .ai { align-self: flex-start; background: var(--glass); border: 1px solid var(--border); border-bottom-left-radius: 4px; backdrop-filter: blur(20px); }
+
+        .cursor { display: inline-block; width: 2px; height: 1.1em; background-color: currentColor; margin-left: 3px; vertical-align: middle; animation: type-blink 0.8s step-end infinite; }
+        @keyframes type-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+        .code-container { position: relative; margin: 10px 0; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: var(--code-bg); }
+        .code-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 15px; background: rgba(255,255,255,0.05); border-bottom: 1px solid var(--border); font-size: 13px; color: #aaa; }
+        .code-lang { font-weight: 500; text-transform: lowercase; }
+        .copy-btn { background: rgba(255,122,48,0.15); border: none; color: #ffb37a; padding: 5px 10px; border-radius: 6px; font-size: 10px; cursor: pointer; backdrop-filter: blur(5px); transition: background 0.2s; }
+        .copy-btn:hover { background: rgba(255,122,48,0.3); }
+        pre { padding: 15px; margin: 0; overflow-x: auto; font-family: 'Fira Code', monospace; font-size: 13px; }
+        pre code { font-family: inherit; }
+
+        .msg a { color: var(--link); text-decoration: underline; }
+        .msg a:hover { opacity: 0.8; }
+        .msg code:not(pre code) { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 6px; font-family: 'Fira Code', monospace; font-size: 0.9em; }
+
+        .msg table { border-collapse: collapse; margin: 10px 0; width: 100%; font-size: 14px; }
+        .msg th, .msg td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+        .msg th { background: rgba(255,255,255,0.08); font-weight: 600; }
+
+        .msg ul, .msg ol { margin: 10px 0; padding-left: 25px; }
+        .msg li { margin-bottom: 4px; }
+        .msg h1, .msg h2, .msg h3 { margin: 12px 0 6px; line-height: 1.3; }
+
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(20px);
+            z-index: 1000; display: none; align-items: center; justify-content: center; padding: 20px;
+            opacity: 0; transition: opacity 0.3s ease;
+        }
+        .modal { background: #0f0f0f; border: 1px solid var(--border); border-radius: 28px; padding: 30px; max-width: 500px; width: 100%; box-shadow: 0 25px 60px rgba(0,0,0,0.8); }
+        .modal h2 { margin-bottom: 15px; font-size: 20px; text-align: center; }
+
+        .terms-box { text-align: left; background: rgba(255,255,255,0.02); padding: 20px; border-radius: 16px; font-size: 13px; max-height: 300px; overflow-y: auto; margin-bottom: 20px; border: 1px solid var(--border); line-height: 1.6; color: #ccc; }
+        .terms-box h4 { color: #fff; margin: 15px 0 5px 0; font-size: 14px; }
+        .terms-box p { margin-bottom: 10px; }
+        .terms-box::-webkit-scrollbar { width: 4px; }
+        .terms-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+
+        .check-area { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 20px; cursor: pointer; font-size: 14px; color: #eee; }
+        .check-area input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--accent); }
+
+        .modal-btn { width: 100%; padding: 16px; border-radius: 14px; border: none; background: var(--accent); color: #180b00; font-weight: 600; cursor: pointer; transition: all 0.2s; font-size: 15px; margin-bottom: 10px; }
+        .modal-btn:last-child { margin-bottom: 0; }
+        .modal-btn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+        .modal-btn:disabled { opacity: 0.2; cursor: not-allowed; }
+
+        .modal-btn.danger { background: var(--danger); color: #fff; }
+        .modal-btn.danger:hover { background: #ff2a2a; }
+        .modal-btn.outline { background: transparent; border: 1px solid var(--border); color: #fff; }
+        .modal-btn.outline:hover { background: rgba(255,255,255,0.05); }
+
+        .field-label { font-size: 12px; opacity: 0.6; margin: 14px 0 6px; display: block; }
+        .field-input { width: 100%; background: var(--glass); border: 1px solid var(--border); border-radius: 12px; padding: 11px 14px; color: #fff; font-size: 13px; outline: none; font-family: 'Fira Code', monospace; }
+        .field-input:focus { border-color: rgba(255,122,48,0.5); }
+        .field-hint { font-size: 11px; opacity: 0.45; margin-top: 6px; line-height: 1.5; }
+
+        .input-area { padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom)); display: flex; gap: 10px; background: rgba(0,0,0,0.3); backdrop-filter: blur(10px); }
+        .input-box { flex: 1; background: var(--glass); border: 1px solid var(--border); border-radius: 20px; padding: 12px 18px; color: #fff; outline: none; font-size: 16px; }
+        .input-box:focus { border-color: rgba(255,122,48,0.4); }
+
+        .dot { width: 4px; height: 4px; background: #aaa; border-radius: 50%; display: inline-block; animation: blink 1.4s infinite; margin: 0 2px; }
+        @keyframes blink { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+
+        .status-badge { display: flex; align-items: center; gap: 6px; }
+        .loading-spinner { width: 12px; height: 12px; border: 2px solid rgba(255,122,48,0.25); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @media (max-width: 768px) {
+            #sidebar { position: fixed; top: 0; bottom: 0; left: 0; margin-left: -280px; box-shadow: 20px 0 40px rgba(0,0,0,0.4); }
+            #sidebar.open { margin-left: 0; }
+            #sidebar.collapsed { margin-left: -280px; }
+            .desktop-only { display: none !important; }
+        }
+        @media (min-width: 769px) {
+            .mobile-only { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg"><div class="s1"></div><div class="s2"></div></div>
+    <div id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+    <!-- ---------- САЙДБАР ---------- -->
+    <aside id="sidebar">
+        <div class="sidebar-header">
+            <div class="sidebar-brand">
+                <div class="brand-avatar" id="brand-avatar"><span class="material-icons-round">memory</span></div>
+                <div class="sidebar-brand-text">
+                    <p>Окто ИИ</p>
+                    <span id="db-label">подключение к базе…</span>
+                </div>
+            </div>
+            <button class="icon-btn mobile-only" onclick="closeSidebar()"><span class="material-icons-round">close</span></button>
+        </div>
+        <button class="new-chat-btn" onclick="createNewChat()">
+            <span class="material-icons-round" style="font-size:18px">add</span>
+            Новый чат
+        </button>
+        <div id="chat-list"></div>
+        <div class="sidebar-footer">
+            <div class="db-status">
+                <div class="db-dot" id="db-dot"></div>
+                <span id="db-status-text">Supabase не настроен</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ---------- ОСНОВНАЯ ОБЛАСТЬ ---------- -->
+    <div id="main">
+        <header class="topbar">
+            <div class="user-info">
+                <button class="icon-btn mobile-only" onclick="openSidebar()"><span class="material-icons-round">menu</span></button>
+                <div class="avatar"><span class="material-icons-round">smart_toy</span></div>
+                <div class="topbar-title">
+                    <p class="name" id="chat-title-display">Окто ИИ</p>
+                    <div class="status-badge">
+                        <p style="font-size:12px; color:rgba(255,255,255,0.5)" id="status">подключение...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="topbar-actions">
+                <button class="settings-btn" onclick="openSettings()">
+                    <span class="material-icons-round">settings</span>
+                </button>
+            </div>
+        </header>
+
+        <div id="chat"></div>
+
+        <div class="input-area">
+            <input type="text" id="input" class="input-box" placeholder="Спроси что-нибудь у Окто..." autocomplete="off">
+            <button id="send-btn"><div id="lottie-send" style="width:24px;height:24px"><span class="material-icons-round" style="color:#180b00">send</span></div></button>
+        </div>
+    </div>
+
+    <!-- ---------- МОДАЛКИ ---------- -->
+    <div id="policy-overlay" class="modal-overlay">
+        <div class="modal">
+            <h2>Политика конфиденциальности ⚖️</h2>
+            <div class="terms-box">
+                <p>Настоящая Политика определяет порядок обработки информации при использовании приложения «Окто ИИ».</p>
+                <h4>1. Сбор и использование данных</h4>
+                <p>1.1. Тексты сообщений передаются по HTTPS в сервис Pollinations AI для генерации ответа.</p>
+                <p>1.2. История переписки сохраняется в базе данных Supabase, привязанной к анонимному идентификатору устройства, который хранится в LocalStorage браузера.</p>
+                <h4>2. Обработка третьими лицами</h4>
+                <p>2.1. Используя приложение, вы соглашаетесь с политикой конфиденциальности Pollinations AI и Supabase. Мы не контролируем методы обработки данных этими сервисами.</p>
+                <h4>3. Безопасность</h4>
+                <p>3.1. Не передавайте в переписке пароли, платёжные данные и другую конфиденциальную информацию.</p>
+                <h4>4. Отказ от ответственности</h4>
+                <p>4.1. Приложение предоставляется «как есть». Разработчик не гарантирует точность ответов ИИ.</p>
+            </div>
+            <label class="check-area" id="check-area-wrapper">
+                <input type="checkbox" id="terms-check">
+                <span>Я подтверждаю, что ознакомлен с политикой и принимаю условия использования сервиса.</span>
+            </label>
+            <button id="accept-btn" class="modal-btn" disabled>Подтвердить и продолжить</button>
+        </div>
+    </div>
+
+    <div id="settings-overlay" class="modal-overlay">
+        <div class="modal">
+            <h2>Настройки ⚙️</h2>
+
+            <p class="field-hint">ИИ работает через наш собственный сервер на Render — ключи вводить не нужно, всё уже настроено.</p>
+
+            <hr class="divider" style="border:none;border-top:1px solid var(--border);margin:20px 0">
+
+            <button class="modal-btn outline" onclick="openPolicy(true)">Политика конфиденциальности</button>
+            <button class="modal-btn danger" onclick="clearAllChats()">Удалить все чаты</button>
+            <button class="modal-btn outline" onclick="closeModal('settings-overlay')">Закрыть</button>
+        </div>
+    </div>
+
+    <script>
+        /* ======================================================================
+           ОКТО ИИ — конфигурация
+           ====================================================================== */
+
+        // 1) SUPABASE — бесплатная база данных для хранения истории чатов.
+        //    Как получить бесплатно:
+        //      1. Зайди на https://supabase.com → New project (бесплатный тариф).
+        //      2. В SQL Editor выполни:
+        //
+        //         create table chats (
+        //           id text primary key,
+        //           device_id text not null,
+        //           title text default 'Новый чат',
+        //           created_at timestamptz default now()
+        //         );
+        //         create table messages (
+        //           id bigint generated always as identity primary key,
+        //           chat_id text references chats(id) on delete cascade,
+        //           role text not null,
+        //           content text not null,
+        //           created_at timestamptz default now()
+        //         );
+        //         alter table chats enable row level security;
+        //         alter table messages enable row level security;
+        //         create policy "anon full access chats" on chats for all using (true) with check (true);
+        //         create policy "anon full access messages" on messages for all using (true) with check (true);
+        //
+        //      3. Settings → API → скопируй "Project URL" и "anon public" ключ, вставь сюда:
+        // ВАЖНО: ключи Supabase и Pollinations больше НЕ хранятся в этом файле.
+        // Это HTML/JS, который будет упакован в APK — любой ключ здесь можно
+        // достать за 30 секунд (распаковать apk → найти assets → открыть файл).
+        // Supabase anon-key — публичный по своей природе (используется вместе с RLS-политиками),
+        // поэтому его можно оставить тут же, но лучше тоже вынести на сервер при желании.
+        const SUPABASE_URL = "https://jxvqnexjmbqeuslajbfz.supabase.co";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4dnFuZXhqbWJxZXVzbGFqYmZ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2NDc0ODEsImV4cCI6MjEwNDIyMzQ4MX0.M9YJO6SETjBpJNU4NyJZ2v9V4c-la2-ZcSuWxrCZTf8";
+
+        // ИИ теперь ходит на наш собственный backend (server.js на Render),
+        // а тот уже сам обращается к Pollinations с ключом, который хранится
+        // в переменных окружения Render (POLLINATIONS_KEY) — не в этом файле.
+        const BACKEND_CHAT_URL = "/api/chat";
+
+        let supa = null;
+        if (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase) {
+            supa = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        }
+
+        // Анонимный идентификатор устройства
+        function getDeviceId() {
+            let id = localStorage.getItem('octo_device_id');
+            if (!id) {
+                id = 'dev_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+                localStorage.setItem('octo_device_id', id);
+            }
+            return id;
+        }
+        const DEVICE_ID = getDeviceId();
+
+        // ---------- DOM ----------
+        const chatContainer = document.getElementById('chat');
+        const inputField = document.getElementById('input');
+        const sendBtn = document.getElementById('send-btn');
+        const statusSpan = document.getElementById('status');
+        const chatListEl = document.getElementById('chat-list');
+        const chatTitleDisplay = document.getElementById('chat-title-display');
+        const dbDot = document.getElementById('db-dot');
+        const dbStatusText = document.getElementById('db-status-text');
+        const dbLabel = document.getElementById('db-label');
+
+        let isSending = false;
+        let currentChatId = null;
+        let chats = []; // {id, title, messages: [{role, content}]}
+
+        function setStatus(text, isLoading = false) {
+            statusSpan.innerHTML = isLoading ? `<span class="loading-spinner"></span> ${text}` : text;
+        }
+
+        // ---------- Модалки ----------
+        function openModal(id) {
+            const el = document.getElementById(id);
+            el.style.display = 'flex';
+            setTimeout(() => el.style.opacity = '1', 10);
+        }
+        function closeModal(id) {
+            const el = document.getElementById(id);
+            el.style.opacity = '0';
+            setTimeout(() => el.style.display = 'none', 300);
+        }
+        function openSettings() {
+            openModal('settings-overlay');
+        }
+        function openPolicy(isViewMode = false) {
+            closeModal('settings-overlay');
+            openModal('policy-overlay');
+            const checkWrapper = document.getElementById('check-area-wrapper');
+            const accept = document.getElementById('accept-btn');
+            if (isViewMode) {
+                checkWrapper.style.display = 'none';
+                accept.disabled = false;
+                accept.textContent = 'Закрыть';
+                accept.onclick = () => closeModal('policy-overlay');
+            } else {
+                checkWrapper.style.display = 'flex';
+                const termsCheck = document.getElementById('terms-check');
+                accept.disabled = !termsCheck.checked;
+                accept.textContent = 'Подтвердить и продолжить';
+                accept.onclick = () => {
+                    localStorage.setItem('octo_legal_accepted', 'true');
+                    closeModal('policy-overlay');
+                };
+                termsCheck.onchange = () => { accept.disabled = !termsCheck.checked; };
+            }
+        }
+
+        // ---------- Сайдбар (мобильный) ----------
+        function openSidebar() {
+            document.getElementById('sidebar').classList.add('open');
+            document.getElementById('sidebar-overlay').classList.add('show');
+        }
+        function closeSidebar() {
+            document.getElementById('sidebar').classList.remove('open');
+            document.getElementById('sidebar-overlay').classList.remove('show');
+        }
+
+        /* ======================================================================
+           ХРАНЕНИЕ ЧАТОВ: Supabase, с фолбэком на LocalStorage если база не настроена
+           ====================================================================== */
+        function localSaveAll() {
+            localStorage.setItem('octo_chats', JSON.stringify(chats));
+        }
+        function localLoadAll() {
+            try { return JSON.parse(localStorage.getItem('octo_chats') || '[]'); }
+            catch (e) { return []; }
+        }
+
+        async function loadChats() {
+            if (supa) {
+                try {
+                    const { data: chatRows, error } = await supa
+                        .from('chats')
+                        .select('id, title, created_at')
+                        .eq('device_id', DEVICE_ID)
+                        .order('created_at', { ascending: false });
+                    if (error) throw error;
+
+                    chats = [];
+                    for (const row of chatRows) {
+                        const { data: msgRows } = await supa
+                            .from('messages')
+                            .select('role, content')
+                            .eq('chat_id', row.id)
+                            .order('id', { ascending: true });
+                        chats.push({ id: row.id, title: row.title, messages: msgRows || [] });
+                    }
+                    setDbStatus(true, 'Supabase подключён');
+                } catch (e) {
+                    console.error('Supabase error', e);
+                    setDbStatus(false, 'ошибка Supabase, локально');
+                    chats = localLoadAll();
+                }
+            } else {
+                setDbStatus(false, 'локальное хранилище');
+                chats = localLoadAll();
+            }
+            renderChatList();
+        }
+
+        function setDbStatus(ok, text) {
+            dbDot.className = 'db-dot ' + (ok ? 'ok' : (supa ? 'err' : ''));
+            dbStatusText.textContent = text;
+            dbLabel.textContent = ok ? 'Supabase · онлайн' : 'локальный режим';
+        }
+
+        async function createChatRecord(id, title) {
+            if (supa) {
+                try {
+                    await supa.from('chats').insert({ id, device_id: DEVICE_ID, title });
+                    return;
+                } catch (e) { console.error(e); }
+            }
+            localSaveAll();
+        }
+        async function renameChatRecord(id, title) {
+            if (supa) {
+                try { await supa.from('chats').update({ title }).eq('id', id); return; }
+                catch (e) { console.error(e); }
+            }
+            localSaveAll();
+        }
+        async function deleteChatRecord(id) {
+            if (supa) {
+                try { await supa.from('chats').delete().eq('id', id); return; }
+                catch (e) { console.error(e); }
+            }
+            localSaveAll();
+        }
+        async function saveMessageRecord(chatId, role, content) {
+            if (supa) {
+                try { await supa.from('messages').insert({ chat_id: chatId, role, content }); return; }
+                catch (e) { console.error(e); }
+            }
+            localSaveAll();
+        }
+
+        /* ======================================================================
+           СПИСОК ЧАТОВ — UI
+           ====================================================================== */
+        function renderChatList() {
+            chatListEl.innerHTML = '';
+            if (!chats.length) {
+                chatListEl.innerHTML = '<div class="chat-list-empty">Пока нет ни одного чата.<br>Нажми «Новый чат», чтобы начать.</div>';
+                return;
+            }
+            chats.forEach(chat => {
+                const item = document.createElement('div');
+                item.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
+                item.innerHTML = `
+                    <span class="material-icons-round chat-ico">chat_bubble_outline</span>
+                    <span class="chat-title">${escapeHTML(chat.title || 'Новый чат')}</span>
+                    <button class="chat-del" title="Удалить чат"><span class="material-icons-round">delete_outline</span></button>
+                `;
+                item.addEventListener('click', (e) => {
+                    if (e.target.closest('.chat-del')) return;
+                    switchChat(chat.id);
+                });
+                item.querySelector('.chat-del').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteChat(chat.id);
+                });
+                chatListEl.appendChild(item);
+            });
+        }
+
+        async function createNewChat() {
+            const id = 'chat_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+            const chat = { id, title: 'Новый чат', messages: [] };
+            chats.unshift(chat);
+            await createChatRecord(id, chat.title);
+            renderChatList();
+            switchChat(id);
+            closeSidebar();
+        }
+
+        function switchChat(id) {
+            currentChatId = id;
+            localStorage.setItem('octo_last_chat', id);
+            renderChatList();
+            renderCurrentChat();
+            closeSidebar();
+        }
+
+        async function deleteChat(id) {
+            if (!confirm('Удалить этот чат безвозвратно?')) return;
+            chats = chats.filter(c => c.id !== id);
+            await deleteChatRecord(id);
+            if (currentChatId === id) {
+                currentChatId = chats.length ? chats[0].id : null;
+            }
+            renderChatList();
+            renderCurrentChat();
+        }
+
+        function clearAllChats() {
+            if (!confirm('Удалить ВСЕ чаты без возможности восстановления?')) return;
+            (async () => {
+                for (const c of chats) await deleteChatRecord(c.id);
+                chats = [];
+                currentChatId = null;
+                localStorage.removeItem('octo_chats');
+                renderChatList();
+                renderCurrentChat();
+                closeModal('settings-overlay');
+            })();
+        }
+
+        function getCurrentChat() {
+            return chats.find(c => c.id === currentChatId) || null;
+        }
+
+        function renderCurrentChat() {
+            const chat = getCurrentChat();
+            chatContainer.innerHTML = '';
+            if (!chat) {
+                chatTitleDisplay.textContent = 'Окто ИИ';
+                showEmptyState();
+                return;
+            }
+            chatTitleDisplay.textContent = chat.title || 'Новый чат';
+            if (!chat.messages.length) {
+                showEmptyState();
+                return;
+            }
+            chat.messages.forEach(m => {
+                addMsgToDOM(m.role === 'user' ? escapeHTML(m.content) : formatText(m.content), m.role === 'user');
+            });
+            chatContainer.scrollTo({ top: chatContainer.scrollHeight });
+        }
+
+        function showEmptyState() {
+            const wrap = document.createElement('div');
+            wrap.className = 'empty-state';
+            wrap.innerHTML = `
+                <div class="empty-octo" id="empty-octo"><span class="material-icons-round" style="font-size:64px;color:var(--accent);opacity:0.6" id="empty-octo-fallback">waving_hand</span></div>
+                <h3>Привет, я Окто 🐙</h3>
+                <p>Спроси что угодно — помогу с кодом, текстом или просто поболтаю.</p>
+            `;
+            chatContainer.appendChild(wrap);
+            loadOctoLottie(document.getElementById('empty-octo'), document.getElementById('empty-octo-fallback'));
+        }
+
+        /* ======================================================================
+           LOTTIE — осьминог (октопус). Файл octopus.json кладётся рядом с chat.html.
+           Если файла нет, остаётся иконка-заглушка — приложение не ломается.
+           ====================================================================== */
+        function loadOctoLottie(container, fallbackEl) {
+            if (!container) return;
+            fetch('octopus.json', { method: 'HEAD' }).then(res => {
+                if (!res.ok) return;
+                if (fallbackEl) fallbackEl.style.display = 'none';
+                lottie.loadAnimation({
+                    container,
+                    renderer: 'svg', loop: true, autoplay: true,
+                    path: 'octopus.json'
+                });
+            }).catch(() => {});
+        }
+
+        /* ======================================================================
+           MARKDOWN-ФОРМАТИРОВАНИЕ (как в оригинале)
+           ====================================================================== */
+        function escapeHTML(str) {
+            return str.replace(/[&<>"']/g, (m) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'}[m]));
+        }
+
+        function formatText(text) {
+            const codeBlocks = [];
+            const inlineCodes = [];
+
+            text = text.replace(/```([\s\S]*?)```/g, (match, content) => {
+                const lines = content.split('\n');
+                let lang = '';
+                let code = content;
+                if (lines.length > 0 && /^[a-zA-Z0-9+#.-]+$/.test(lines[0].trim()) && !lines[0].trim().includes(' ')) {
+                    lang = lines[0].trim();
+                    code = lines.slice(1).join('\n');
+                }
+                const id = 'code-' + Math.random().toString(36).substr(2, 9);
+                const escapedCode = escapeHTML(code.trim());
+                const placeholder = `%%BLOCKCODE_${codeBlocks.length}%%`;
+                codeBlocks.push({
+                    placeholder,
+                    html: `<div class="code-container">
+                        <div class="code-header">
+                            <span class="code-lang">${lang || 'code'}</span>
+                            <button class="copy-btn" data-code-id="${id}">Copy</button>
+                        </div>
+                        <pre><code id="${id}" class="${lang ? 'language-' + lang.toLowerCase() : ''}">${escapedCode}</code></pre>
+                    </div>`
+                });
+                return placeholder;
+            });
+
+            text = text.replace(/`([^`]+)`/g, (match, code) => {
+                const escaped = escapeHTML(code);
+                const placeholder = `%%INLINECODE_${inlineCodes.length}%%`;
+                inlineCodes.push({ placeholder, html: `<code>${escaped}</code>` });
+                return placeholder;
+            });
+
+            text = text.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+            text = text.replace(/\*(.*?)\*/g, '<i>$1</i>');
+            text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+            text = text.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+            text = text.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+            text = text.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+            const lines = text.split('\n');
+            const outputLines = [];
+            let i = 0;
+            while (i < lines.length) {
+                const line = lines[i];
+                const ulMatch = line.match(/^[\-\*\+] (.*)/);
+                const olMatch = line.match(/^(\d+)\. (.*)/);
+                if (ulMatch || olMatch) {
+                    const items = [];
+                    const isOrdered = !!olMatch;
+                    while (i < lines.length && (ulMatch ? lines[i].match(/^[\-\*\+] /) : lines[i].match(/^\d+\. /))) {
+                        const m = isOrdered ? lines[i].match(/^\d+\. (.*)/) : lines[i].match(/^[\-\*\+] (.*)/);
+                        if (m) items.push(m[1]);
+                        i++;
+                    }
+                    const tag = isOrdered ? 'ol' : 'ul';
+                    outputLines.push(`<${tag}>`);
+                    items.forEach(item => outputLines.push(`<li>${item}</li>`));
+                    outputLines.push(`</${tag}>`);
+                    continue;
+                }
+
+                if (line.trim().startsWith('|')) {
+                    const tableLines = [];
+                    while (i < lines.length && lines[i].trim().startsWith('|')) {
+                        tableLines.push(lines[i]);
+                        i++;
+                    }
+                    let headerRow = null;
+                    let bodyRows = [];
+                    if (tableLines.length >= 2 && /^[\|\s\-:]+$/.test(tableLines[1].replace(/\|/g, '').trim())) {
+                        headerRow = tableLines[0];
+                        bodyRows = tableLines.slice(2);
+                    } else {
+                        bodyRows = tableLines;
+                    }
+                    const htmlTable = ['<table>'];
+                    if (headerRow) {
+                        htmlTable.push('<thead><tr>');
+                        headerRow.split('|').filter(c => c.trim() !== '').forEach(cell => {
+                            htmlTable.push(`<th>${cell.trim()}</th>`);
+                        });
+                        htmlTable.push('</tr></thead>');
+                    }
+                    if (bodyRows.length) {
+                        htmlTable.push('<tbody>');
+                        bodyRows.forEach(row => {
+                            htmlTable.push('<tr>');
+                            row.split('|').filter(c => c.trim() !== '').forEach(cell => {
+                                htmlTable.push(`<td>${cell.trim()}</td>`);
+                            });
+                            htmlTable.push('</tr>');
+                        });
+                        htmlTable.push('</tbody>');
+                    }
+                    htmlTable.push('</table>');
+                    outputLines.push(htmlTable.join(''));
+                    continue;
+                }
+
+                outputLines.push(line);
+                i++;
+            }
+            text = outputLines.join('\n');
+            text = text.replace(/\n/g, '<br>');
+
+            inlineCodes.forEach(({ placeholder, html }) => { text = text.replace(placeholder, html); });
+            codeBlocks.forEach(({ placeholder, html }) => { text = text.replace(placeholder, html); });
+
+            return text;
+        }
+
+        async function typeText(element, html) {
+            const tokens = html.match(/(<div class="code-container">[\s\S]*?<\/div>|<[^>]+>|&[^;]+;|[\s\S])/g) || [];
+            let currentHTML = "";
+            const cursorHTML = '<span class="cursor"></span>';
+
+            for (let token of tokens) {
+                currentHTML += token;
+                element.innerHTML = currentHTML + cursorHTML;
+                chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+                if (!token.startsWith('<')) await new Promise(r => setTimeout(r, 10));
+            }
+            element.innerHTML = currentHTML;
+            element.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+            element.querySelectorAll('.copy-btn').forEach(btn => {
+                const codeId = btn.getAttribute('data-code-id');
+                if (codeId) btn.addEventListener('click', () => copyCode(codeId));
+            });
+        }
+
+        async function copyCode(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            await navigator.clipboard.writeText(el.innerText);
+            const btn = document.querySelector(`.copy-btn[data-code-id="${id}"]`);
+            if (btn) {
+                btn.innerText = 'Copied!';
+                setTimeout(() => btn.innerText = 'Copy', 2000);
+            }
+        }
+
+        function addMsgToDOM(html, isUser) {
+            const emptyState = chatContainer.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+            const div = document.createElement('div');
+            div.className = `msg ${isUser ? 'user' : 'ai'}`;
+            div.innerHTML = html;
+            chatContainer.appendChild(div);
+            chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+            return div;
+        }
+
+        /* ======================================================================
+           POLLINATIONS AI — запрос к бесплатной GPT-модели
+           ====================================================================== */
+        async function askAI(prompt, historyMessages) {
+            try {
+                const response = await fetch(BACKEND_CHAT_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt,
+                        history: historyMessages.slice(-16)
+                    })
+                });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const data = await response.json();
+                return (data.reply || '').trim() || "Хм, пришёл пустой ответ 🐙 Попробуй ещё раз.";
+            } catch (e) {
+                console.error(e);
+                return "Ой, не получилось связаться с сервером ИИ 🐙 Попробуй ещё раз через пару секунд.";
+            }
+        }
+
+        /* ======================================================================
+           ОТПРАВКА СООБЩЕНИЯ
+           ====================================================================== */
+        async function sendMessage() {
+            if (isSending) return;
+            const text = inputField.value.trim();
+            if (!text) return;
+
+            let chat = getCurrentChat();
+            if (!chat) {
+                await createNewChat();
+                chat = getCurrentChat();
+            }
+
+            isSending = true;
+            sendBtn.classList.add('disabled');
+
+            addMsgToDOM(escapeHTML(text), true);
+            inputField.value = '';
+            chat.messages.push({ role: 'user', content: text });
+            saveMessageRecord(chat.id, 'user', text);
+
+            if (chat.messages.filter(m => m.role === 'user').length === 1) {
+                chat.title = text.slice(0, 34) + (text.length > 34 ? '…' : '');
+                chatTitleDisplay.textContent = chat.title;
+                renameChatRecord(chat.id, chat.title);
+                renderChatList();
+            }
+
+            setStatus("печатает...", true);
+            const loadingMsg = addMsgToDOM('<div class="dot"></div><div class="dot"></div><div class="dot"></div>', false);
+
+            const historyForApi = chat.messages
+                .slice(0, -1)
+                .map(m => ({ role: m.role, content: m.content }));
+
+            const reply = await askAI(text, historyForApi);
+            loadingMsg.remove();
+
+            const aiMsgBox = addMsgToDOM('', false);
+            await typeText(aiMsgBox, formatText(reply));
+
+            chat.messages.push({ role: 'assistant', content: reply });
+            saveMessageRecord(chat.id, 'assistant', reply);
+
+            setStatus("в сети");
+            isSending = false;
+            sendBtn.classList.remove('disabled');
+        }
+
+        /* ======================================================================
+           ИНИЦИАЛИЗАЦИЯ
+           ====================================================================== */
+        window.onload = async () => {
+            if (!localStorage.getItem('octo_legal_accepted')) {
+                openPolicy(false);
+            }
+
+            setStatus("загрузка чатов...", true);
+            await loadChats();
+
+            const lastId = localStorage.getItem('octo_last_chat');
+            if (lastId && chats.find(c => c.id === lastId)) {
+                currentChatId = lastId;
+            } else if (chats.length) {
+                currentChatId = chats[0].id;
+            }
+            renderChatList();
+            renderCurrentChat();
+            setStatus("в сети");
+
+            loadOctoLottie(document.getElementById('brand-avatar'), null);
+
+            sendBtn.onclick = sendMessage;
+            inputField.onkeypress = (e) => e.key === 'Enter' && sendMessage();
+        };
+
+        window.openSettings = openSettings;
+        window.openPolicy = openPolicy;
+        window.closeModal = closeModal;
+        window.clearAllChats = clearAllChats;
+        window.copyCode = copyCode;
+        window.createNewChat = createNewChat;
+        window.openSidebar = openSidebar;
+        window.closeSidebar = closeSidebar;
+    </script>
+</body>
+</html>
